@@ -18,6 +18,7 @@ import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
+import openpi.policies.astribot_policy as astribot_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
@@ -558,6 +559,184 @@ class TrainConfig:
 
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS = [
+    #
+    # Astribot fine-tuning configs.
+    #
+    TrainConfig(
+        name="pi05_astribot_full_finetune",
+        # Full fine-tuning version for Astribot.
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            # pi05 is trained with 32-dim states/actions; we will pad our 25-dim Astribot vectors.
+            action_dim=32,
+            # Action chunk length. For ~30Hz camera-aligned frames, 16 => ~0.53s horizon.
+            action_horizon=64,
+        ),
+        # No freeze filter for full fine-tuning - all parameters are trainable.
+        # Keep EMA for full fine-tuning.
+        data=SimpleDataConfig(
+            # LeRobot repo id created by the converter. For the example dataset in this repo we use:
+            repo_id="local/astribot_serve_small_mm_beans_simplified_with_nops_downsampled",
+            # Stable asset id for Astribot so norm stats land under ./assets/pi05_astribot_full_finetune/astribot
+            assets=AssetsConfig(asset_id="astribot"),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[astribot_policy.AstribotInputs(model_type=ModelType.PI05)],
+                outputs=[astribot_policy.AstribotOutputs(action_dim=25)],
+            ).push(
+                # Convert to delta actions for all joints except grippers (indices 7 and 15).
+                # Astribot has 25 DoF: body(7) + left_arm(7) + left_gripper(1) + right_arm(7) + right_gripper(1) + head(2).
+                inputs=[_transforms.DeltaActions(_transforms.make_bool_mask(7, 7, -1, 7, -1, 2))],
+                outputs=[_transforms.AbsoluteActions(_transforms.make_bool_mask(7, 7, -1, 7, -1, 2))],
+            ).push(
+                # Apply joint position noise compensation after delta conversion.
+                inputs=[_transforms.JointPositionNoiseCompensateActions(obs_key="state", std=0.001)],
+            ),
+            base_config=DataConfig(
+                # The converter stores the language under the LeRobot "task" field.
+                prompt_from_task=True,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "observation/head_rgbd": "head_rgbd",
+                                "observation/left_wrist_rgbd": "left_wrist_rgbd",
+                                "observation/right_wrist_rgbd": "right_wrist_rgbd",
+                                "observation/joint_position": "joint_position",
+                                "actions": "actions",
+                                "prompt": "task",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("actions",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # Tweak these defaults as needed.
+        batch_size=64,
+        num_train_steps=30_000,
+        save_interval=10_000,
+        log_interval=100,
+        num_workers=4
+    ),
+    
+    TrainConfig(
+        name="pi05_astribot_scratch",
+        # Full fine-tuning version for Astribot.
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            # pi05 is trained with 32-dim states/actions; we will pad our 25-dim Astribot vectors.
+            action_dim=32,
+            # Action chunk length. For ~30Hz camera-aligned frames, 16 => ~0.53s horizon.
+            action_horizon=16,
+        ),
+        # No freeze filter for full fine-tuning - all parameters are trainable.
+        # Keep EMA for full fine-tuning.
+        ema_decay=0.99,
+        data=SimpleDataConfig(
+            # LeRobot repo id created by the converter. For the example dataset in this repo we use:
+            repo_id="local/astribot_serve_small_mm_beans_300_with_nops_downsampled",
+            # Stable asset id for Astribot so norm stats land under ./assets/pi05_astribot_full_finetune/astribot
+            assets=AssetsConfig(asset_id="astribot"),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[astribot_policy.AstribotInputs(model_type=ModelType.PI05)],
+                outputs=[astribot_policy.AstribotOutputs(action_dim=25)],
+            ).push(
+                # Convert to delta actions for all joints except grippers (indices 7 and 15).
+                # Astribot has 25 DoF: body(7) + left_arm(7) + left_gripper(1) + right_arm(7) + right_gripper(1) + head(2).
+                inputs=[_transforms.DeltaActions(_transforms.make_bool_mask(7, 7, -1, 7, -1, 2))],
+                outputs=[_transforms.AbsoluteActions(_transforms.make_bool_mask(7, 7, -1, 7, -1, 2))],
+            ),
+            base_config=DataConfig(
+                # The converter stores the language under the LeRobot "task" field.
+                prompt_from_task=True,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "observation/head_rgbd": "head_rgbd",
+                                "observation/left_wrist_rgbd": "left_wrist_rgbd",
+                                "observation/right_wrist_rgbd": "right_wrist_rgbd",
+                                "observation/joint_position": "joint_position",
+                                "actions": "actions",
+                                "prompt": "task",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("actions",),
+            ),
+        ),
+        # Tweak these defaults as needed.
+        batch_size=32,
+        num_train_steps=30_000,
+        save_interval=10_000,
+        log_interval=100,
+        num_workers=4
+    ),
+    
+    TrainConfig(
+        name="pi05_astribot",
+        # Use LoRA for smoke / local runs to avoid full fine-tune optimizer + EMA memory blow-ups.
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            # pi05 is trained with 32-dim states/actions; we will pad our 25-dim Astribot vectors.
+            action_dim=32,
+            # Action chunk length. For ~30Hz camera-aligned frames, 16 => ~0.53s horizon.
+            action_horizon=32,
+        ),
+        # Freeze the base model; train only LoRA parameters.
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        # EMA would duplicate the (large) parameter tree in memory; disable for local smoke.
+        ema_decay=None,
+        data=SimpleDataConfig(
+            # LeRobot repo id created by the converter. For the example dataset in this repo we use:
+            repo_id="local/astribot_serve_small_mm_beans_300",
+            # Stable asset id for Astribot so norm stats land under ./assets/pi05_astribot/astribot
+            assets=AssetsConfig(asset_id="astribot"),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[astribot_policy.AstribotInputs(model_type=ModelType.PI05)],
+                outputs=[astribot_policy.AstribotOutputs(action_dim=25)],
+            ).push(
+                # Convert to delta actions for all joints except grippers (indices 7 and 15).
+                # Astribot has 25 DoF: body(7) + left_arm(7) + left_gripper(1) + right_arm(7) + right_gripper(1) + head(2).
+                inputs=[_transforms.DeltaActions(_transforms.make_bool_mask(7, 7, -1, 7, -1, 2))],
+                outputs=[_transforms.AbsoluteActions(_transforms.make_bool_mask(7, 7, -1, 7, -1, 2))],
+            ),
+            base_config=DataConfig(
+                # The converter stores the language under the LeRobot "task" field.
+                prompt_from_task=True,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "observation/head_rgbd": "head_rgbd",
+                                "observation/left_wrist_rgbd": "left_wrist_rgbd",
+                                "observation/right_wrist_rgbd": "right_wrist_rgbd",
+                                "observation/joint_position": "joint_position",
+                                "actions": "actions",
+                                "prompt": "task",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("actions",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # Tweak these defaults as needed.
+        batch_size=128,
+        num_train_steps=20_000,
+        save_interval=5_000,
+        log_interval=100,
+        num_workers=16
+    ),
     #
     # Inference Aloha configs.
     #

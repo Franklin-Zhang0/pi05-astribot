@@ -245,6 +245,66 @@ class AbsoluteActions(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class JointPositionNoiseCompensateActions(DataTransformFn):
+    """Injects random Gaussian noise into joint position observations and compensates actions.
+
+    This transform adds random Gaussian noise to the proprioceptive joint position observations
+    and simultaneously subtracts the same noise from the action targets. This encourages the
+    policy to learn stability by compensating for observation noise.
+
+    Typical placement: Apply after delta-action conversion (e.g., DeltaActions) and before
+    normalization (e.g., Normalize). This ensures the noise compensation operates in the
+    correct action space and that normalization statistics remain valid.
+
+    Args:
+        obs_key: The key in the data dictionary containing the observation to add noise to.
+            Default is "state" to work with standard pipelines.
+        std: Standard deviation of the Gaussian noise. Mean is always 0.
+        compensate_actions: If True, subtract the same noise from actions (broadcast along horizon).
+        mask: Optional boolean mask to apply noise only to selected dimensions. If provided,
+            only the first len(mask) dimensions are affected. If None, noise is applied to all
+            dimensions.
+    """
+
+    obs_key: str = "state"
+    std: float = 0.01
+    compensate_actions: bool = True
+    mask: Sequence[bool] | None = None
+
+    def __call__(self, data: DataDict) -> DataDict:
+        # No-op if observation key is missing
+        if self.obs_key not in data:
+            return data
+
+        obs = data[self.obs_key]
+        obs_shape = obs.shape
+        obs_dtype = obs.dtype
+
+        # Sample Gaussian noise with the same shape as observation
+        noise = np.random.normal(0.0, self.std, size=obs_shape).astype(obs_dtype)
+
+        # Apply mask if provided
+        if self.mask is not None:
+            mask_array = np.asarray(self.mask)
+            dims = mask_array.shape[-1]
+            # Only apply noise to masked dimensions
+            noise[..., :dims] = np.where(mask_array, noise[..., :dims], 0)
+
+        # Add noise to observation
+        data[self.obs_key] = obs + noise
+
+        # Compensate actions if requested and actions exist
+        if self.compensate_actions and "actions" in data:
+            actions = data["actions"]
+            # Broadcast noise along the action horizon axis (axis=-2)
+            # obs shape: (..., D), actions shape: (..., H, D)
+            noise_broadcast = np.expand_dims(noise, axis=-2)
+            data["actions"] = actions - noise_broadcast / 10.0
+
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class TokenizePrompt(DataTransformFn):
     tokenizer: _tokenizer.PaligemmaTokenizer
     discrete_state_input: bool = False
