@@ -4,6 +4,7 @@ import re
 from typing import Protocol, runtime_checkable
 
 import flax.traverse_util
+import jax
 import numpy as np
 
 import openpi.models.model as _model
@@ -55,6 +56,23 @@ class CheckpointWeightLoader(WeightLoader):
 
 
 @dataclasses.dataclass(frozen=True)
+class ExpandedActionDimCheckpointWeightLoader(WeightLoader):
+    """Load a checkpoint while expanding only the action input/output projections.
+
+    Released pi0/pi0.5 checkpoints use 32 action dimensions. Robots with more
+    actuators need wider projections, but all other pretrained parameters should
+    still load exactly. The overlapping projection block is copied from the
+    checkpoint and newly added rows/columns keep their initialized values.
+    """
+
+    params_path: str
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+        return _merge_params_with_expanded_action_dim(loaded_params, params)
+
+
+@dataclasses.dataclass(frozen=True)
 class PaliGemmaWeightLoader(WeightLoader):
     """Loads weights from the official PaliGemma checkpoint.
 
@@ -100,5 +118,46 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
     for k in {k for k in flat_ref if pattern.fullmatch(k)}:
         if k not in result:
             result[k] = flat_ref[k]
+
+    return flax.traverse_util.unflatten_dict(result, sep="/")
+
+
+def _merge_params_with_expanded_action_dim(loaded_params: at.Params, params: at.Params) -> at.Params:
+    """Merge pretrained params, allowing shape changes only in action projections."""
+
+    flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
+    flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+    result = dict(flat_ref)
+
+    allowed_shape_change = re.compile(r"(?:^|/)(?:action_in_proj|action_out_proj)/(?:kernel|bias)(?:/value)?$")
+    for key, loaded_value in flat_loaded.items():
+        if key not in flat_ref:
+            continue
+
+        ref_value = flat_ref[key]
+        if loaded_value.shape == ref_value.shape:
+            result[key] = (
+                loaded_value.astype(ref_value.dtype) if loaded_value.dtype != ref_value.dtype else loaded_value
+            )
+            continue
+
+        if not allowed_shape_change.search(key) or loaded_value.ndim != ref_value.ndim:
+            raise ValueError(
+                f"Checkpoint parameter shape mismatch outside action projections: {key}: "
+                f"checkpoint={loaded_value.shape}, initialized={ref_value.shape}"
+            )
+
+        # Training passes ShapeDtypeStruct leaves from jax.eval_shape, not the
+        # concrete randomly initialized arrays. There is no initialized value
+        # to preserve for the newly added action dimensions in that case, so
+        # zero-initialize only the expanded region before copying the complete
+        # pretrained overlap. Concrete callers still preserve their values.
+        if isinstance(ref_value, jax.ShapeDtypeStruct):
+            expanded = np.zeros(ref_value.shape, dtype=ref_value.dtype)
+        else:
+            expanded = np.array(ref_value, copy=True)
+        overlap = tuple(slice(0, min(old, new)) for old, new in zip(loaded_value.shape, ref_value.shape, strict=True))
+        expanded[overlap] = loaded_value[overlap].astype(expanded.dtype, copy=False)
+        result[key] = expanded
 
     return flax.traverse_util.unflatten_dict(result, sep="/")

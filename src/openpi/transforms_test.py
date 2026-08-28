@@ -62,6 +62,38 @@ def test_absolute_actions_noop():
     assert transform(item) is item
 
 
+def test_joint_position_noise_is_training_only(monkeypatch):
+    transform = _transforms.JointPositionNoiseCompensateActions(obs_key="state", std=0.001)
+    inference_item = {"state": np.array([1.0, 2.0, 3.0], dtype=np.float32)}
+    original_state = inference_item["state"].copy()
+
+    monkeypatch.setattr(
+        np.random,
+        "normal",
+        lambda _mean, _std, *, size: np.full(size, 0.5, dtype=np.float32),
+    )
+
+    transformed = transform(inference_item)
+
+    assert transformed is inference_item
+    np.testing.assert_array_equal(transformed["state"], original_state)
+
+
+def test_joint_position_noise_compensates_training_actions(monkeypatch):
+    transform = _transforms.JointPositionNoiseCompensateActions(obs_key="state", std=0.001)
+    item = {
+        "state": np.array([1.0, 2.0, 3.0], dtype=np.float32),
+        "actions": np.zeros((2, 3), dtype=np.float32),
+    }
+    noise = np.array([0.01, -0.02, 0.03], dtype=np.float32)
+    monkeypatch.setattr(np.random, "normal", lambda _mean, _std, *, size: noise.copy())
+
+    transformed = transform(item)
+
+    np.testing.assert_allclose(transformed["state"], np.array([1.01, 1.98, 3.03], dtype=np.float32))
+    np.testing.assert_allclose(transformed["actions"], -np.broadcast_to(noise / 10.0, (2, 3)))
+
+
 def test_make_bool_mask():
     assert _transforms.make_bool_mask(2, -2, 2) == (True, True, False, False, True, True)
     assert _transforms.make_bool_mask(2, 0, 2) == (True, True, True, True)

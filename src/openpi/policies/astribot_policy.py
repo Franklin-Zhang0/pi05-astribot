@@ -29,15 +29,15 @@ class AstribotInputs(transforms.DataTransformFn):
       - observation/head_rgbd: HWC uint8 RGB
       - observation/left_wrist_rgbd: HWC uint8 RGB (optional)
       - observation/right_wrist_rgbd: HWC uint8 RGB (optional)
-      - observation/joint_position: (25,) float (whole-body joint positions in a fixed order)
-      - actions: (T, 25) float (optional; only during training)
+      - observation/joint_position: (D,) float (robot joint positions in the configured order)
+      - actions: (T, D) float (optional; only during training)
       - prompt: str (optional; will be injected by ModelTransformFactory default prompt or prompt_from_task)
 
     Output dict (openpi common format):
       - image: dict[str, HWC uint8]
       - image_mask: dict[str, bool]
-      - state: float32[25]
-      - actions: float32[T,25] (if present)
+      - state: float32[D]
+      - actions: float32[T,D] (if present)
       - prompt: str (if present)
     """
 

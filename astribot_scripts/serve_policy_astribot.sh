@@ -1,58 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Serve a fine-tuned Astribot policy checkpoint via websocket.
-#
-# Starts [`openpi/scripts/serve_policy.py`](openpi/scripts/serve_policy.py:1) using the Astribot training config
-# [`pi05_astribot`](openpi/src/openpi/training/config.py:565).
+# Serve the pi05 Astribot light-candle checkpoint without mutating its assets.
 
 cd "$(dirname "$0")/.."  # -> openpi/
 
-CKPT_DIR="${1:-}"
-if [[ -z "${CKPT_DIR}" ]]; then
-  echo "Usage: $0 <checkpoint_dir> [port]"
-  echo "Example: $0 checkpoints/pi05_astribot/astribot_serve_small_mm_beans/20000 8000"
+DEFAULT_CKPT=/data2/202608/astribot/checkpoints/pi05_astribot_light_candle/astribot-light-candle-20260827-235217/20000
+CKPT_DIR="${1:-${DEFAULT_CKPT}}"
+PORT="${2:-8000}"
+POLICY_CONFIG="${3:-pi05_astribot_light_candle}"
+DEFAULT_PROMPT="${4:-Light the candle}"
+ASSET_ID=astribot/astribot_light_candle_lerobot
+NORM_STATS="${CKPT_DIR}/assets/${ASSET_ID}/norm_stats.json"
+
+if [[ ! -d "${CKPT_DIR}/params" ]]; then
+  echo "Checkpoint params not found: ${CKPT_DIR}/params" >&2
+  exit 2
+fi
+if [[ ! -f "${NORM_STATS}" ]]; then
+  echo "Checkpoint-owned norm stats not found: ${NORM_STATS}" >&2
   exit 2
 fi
 
-POLICY_CONFIG="${2}"
+export OPENPI_DATA_HOME="${OPENPI_DATA_HOME:-/data2/202608/astribot/training_artifacts/openpi_cache}"
 
-PORT="${3:-8000}"
+echo "Serving checkpoint: ${CKPT_DIR}"
+echo "Config: ${POLICY_CONFIG}; prompt: ${DEFAULT_PROMPT}; port: ${PORT}"
 
-if [ -e "$CKPT_DIR/assets/astribot/norm_stats.json" ]; then
-  echo skip cp normstat
-else
-  mkdir -p $CKPT_DIR/assets/astribot
-  cp $CKPT_DIR/assets/local/*/norm_stats.json $CKPT_DIR/assets/astribot
-fi
-
-echo "Serving checkpoint: ${CKPT_DIR} on port ${PORT} using config ${POLICY_CONFIG}"
-
-(
-echo Waiting for compiling...
-sleep 45
-python /data/250010203/franklin/project/pi_astribot_finetune/astribot_pi/src/astribot_pi/traj_replay_offline.py \
-  --policy-host 127.0.0.1 --policy-port $PORT --prompt "Serve small MM beans" --hdf5 /data/250010203/franklin/project/pi_astribot_finetune/astribot_data_example/Serve_small_MM_episode_abs_0.hdf5 > /dev/null
-echo Still waiting for compiling...
-
-sleep 30
-python /data/250010203/franklin/project/pi_astribot_finetune/astribot_pi/src/astribot_pi/traj_replay_offline.py \
-  --policy-host 127.0.0.1 --policy-port $PORT --prompt "Serve small MM beans" --hdf5 /data/250010203/franklin/project/pi_astribot_finetune/astribot_data_example/Serve_small_MM_episode_abs_0.hdf5 > /dev/null
-echo Still waiting for compiling...
-
-sleep 30
-python /data/250010203/franklin/project/pi_astribot_finetune/astribot_pi/src/astribot_pi/traj_replay_offline.py \
-  --policy-host 127.0.0.1 --policy-port $PORT --prompt "Serve small MM beans" --hdf5 /data/250010203/franklin/project/pi_astribot_finetune/astribot_data_example/Serve_small_MM_episode_abs_0.hdf5 > /dev/null
-echo Still waiting for compiling...
-
-python /data/250010203/franklin/project/pi_astribot_finetune/astribot_pi/src/astribot_pi/traj_replay_offline.py \
-  --policy-host 127.0.0.1 --policy-port $PORT --prompt "Serve small MM beans" --hdf5 /data/250010203/franklin/project/pi_astribot_finetune/astribot_data_example/Serve_small_MM_episode_abs_0.hdf5 > /dev/null
-
-)&
-
-/data/250010203/franklin/project/pi_astribot_finetune/openpi/.venv/bin/python \
-  scripts/serve_policy.py --port="${PORT}" policy:checkpoint \
-  --policy.config=$POLICY_CONFIG \
+exec .venv/bin/python scripts/serve_policy.py \
+  --port="${PORT}" \
+  --default-prompt="${DEFAULT_PROMPT}" \
+  policy:checkpoint \
+  --policy.config="${POLICY_CONFIG}" \
   --policy.dir="${CKPT_DIR}"
-
-# run one to start compile

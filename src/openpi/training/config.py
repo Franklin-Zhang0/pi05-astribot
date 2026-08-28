@@ -593,22 +593,23 @@ _CONFIGS = [
             ),
             base_config=DataConfig(
                 # The converter stores the language under the LeRobot "task" field.
+                # Updated to match mm22_5_4_lerobot structure with images_dict and joints_dict keys.
                 prompt_from_task=True,
                 repack_transforms=_transforms.Group(
                     inputs=[
                         _transforms.RepackTransform(
                             {
-                                "observation/head_rgbd": "head_rgbd",
-                                "observation/left_wrist_rgbd": "left_wrist_rgbd",
-                                "observation/right_wrist_rgbd": "right_wrist_rgbd",
-                                "observation/joint_position": "joint_position",
-                                "actions": "actions",
+                                "observation/head_rgbd": "images_dict.head.rgb",
+                                "observation/left_wrist_rgbd": "images_dict.left.rgb",
+                                "observation/right_wrist_rgbd": "images_dict.right.rgb",
+                                "observation/joint_position": "joints_dict.joints_position_state",
+                                "actions": "joints_dict.joints_position_command",
                                 "prompt": "task",
                             }
                         )
                     ]
                 ),
-                action_sequence_keys=("actions",),
+                action_sequence_keys=("joints_dict.joints_position_command",),
             ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
@@ -619,7 +620,64 @@ _CONFIGS = [
         log_interval=100,
         num_workers=4
     ),
-    
+
+    TrainConfig(
+        name="pi05_astribot_light_candle",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            # The stationary task uses 20 upper-body DoF and 16 driver-space DoF per hand.
+            # Pad the resulting 52-dimensional state/action vectors to 64.
+            action_dim=64,
+            action_horizon=64,
+        ),
+        data=SimpleDataConfig(
+            repo_id="astribot/astribot_light_candle_lerobot",
+            assets=AssetsConfig(asset_id="astribot/astribot_light_candle_lerobot"),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[astribot_policy.AstribotInputs(model_type=ModelType.PI05)],
+                outputs=[astribot_policy.AstribotOutputs(action_dim=52)],
+            ).push(
+                # Body commands are deltas; the 16 driver-space joints of each hand stay absolute.
+                inputs=[_transforms.DeltaActions(_transforms.make_bool_mask(20, -32))],
+                outputs=[_transforms.AbsoluteActions(_transforms.make_bool_mask(20, -32))],
+            ).push(
+                # Match the proprio augmentation used by the previous Astribot training.
+                # It must remain after delta conversion and before normalization.
+                inputs=[_transforms.JointPositionNoiseCompensateActions(obs_key="state", std=0.001)],
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "observation/head_rgbd": "images.head",
+                                "observation/left_wrist_rgbd": "images.left_wrist",
+                                "observation/right_wrist_rgbd": "images.right_wrist",
+                                "observation/joint_position": "state",
+                                "actions": "actions",
+                                "prompt": "task",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("actions",),
+            ),
+        ),
+        weight_loader=weight_loaders.ExpandedActionDimCheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        assets_base_dir="/data2/202608/astribot/training_artifacts/assets",
+        checkpoint_base_dir="/data2/202608/astribot/checkpoints",
+        batch_size=64,
+        num_train_steps=20_001,
+        save_interval=10_000,
+        keep_period=10_000,
+        log_interval=100,
+        num_workers=16,
+        fsdp_devices=8,
+    ),
+
     TrainConfig(
         name="pi05_astribot_scratch",
         # Full fine-tuning version for Astribot.
@@ -649,22 +707,23 @@ _CONFIGS = [
             ),
             base_config=DataConfig(
                 # The converter stores the language under the LeRobot "task" field.
+                # Updated to match mm22_5_4_lerobot structure with images_dict and joints_dict keys.
                 prompt_from_task=True,
                 repack_transforms=_transforms.Group(
                     inputs=[
                         _transforms.RepackTransform(
                             {
-                                "observation/head_rgbd": "head_rgbd",
-                                "observation/left_wrist_rgbd": "left_wrist_rgbd",
-                                "observation/right_wrist_rgbd": "right_wrist_rgbd",
-                                "observation/joint_position": "joint_position",
-                                "actions": "actions",
+                                "observation/head_rgbd": "images_dict.head.rgb",
+                                "observation/left_wrist_rgbd": "images_dict.left.rgb",
+                                "observation/right_wrist_rgbd": "images_dict.right.rgb",
+                                "observation/joint_position": "joints_dict.joints_position_state",
+                                "actions": "joints_dict.joints_position_command",
                                 "prompt": "task",
                             }
                         )
                     ]
                 ),
-                action_sequence_keys=("actions",),
+                action_sequence_keys=("joints_dict.joints_position_command",),
             ),
         ),
         # Tweak these defaults as needed.
@@ -674,7 +733,7 @@ _CONFIGS = [
         log_interval=100,
         num_workers=4
     ),
-    
+
     TrainConfig(
         name="pi05_astribot",
         # Use LoRA for smoke / local runs to avoid full fine-tune optimizer + EMA memory blow-ups.
@@ -711,22 +770,23 @@ _CONFIGS = [
             ),
             base_config=DataConfig(
                 # The converter stores the language under the LeRobot "task" field.
+                # Updated to match mm22_5_4_lerobot structure with images_dict and joints_dict keys.
                 prompt_from_task=True,
                 repack_transforms=_transforms.Group(
                     inputs=[
                         _transforms.RepackTransform(
                             {
-                                "observation/head_rgbd": "head_rgbd",
-                                "observation/left_wrist_rgbd": "left_wrist_rgbd",
-                                "observation/right_wrist_rgbd": "right_wrist_rgbd",
-                                "observation/joint_position": "joint_position",
-                                "actions": "actions",
+                                "observation/head_rgbd": "images_dict.head.rgb",
+                                "observation/left_wrist_rgbd": "images_dict.left.rgb",
+                                "observation/right_wrist_rgbd": "images_dict.right.rgb",
+                                "observation/joint_position": "joints_dict.joints_position_state",
+                                "actions": "joints_dict.joints_position_command",
                                 "prompt": "task",
                             }
                         )
                     ]
                 ),
-                action_sequence_keys=("actions",),
+                action_sequence_keys=("joints_dict.joints_position_command",),
             ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),

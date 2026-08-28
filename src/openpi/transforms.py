@@ -272,8 +272,9 @@ class JointPositionNoiseCompensateActions(DataTransformFn):
     mask: Sequence[bool] | None = None
 
     def __call__(self, data: DataDict) -> DataDict:
-        # No-op if observation key is missing
-        if self.obs_key not in data:
+        # This is a training augmentation. Inference observations do not contain
+        # action targets, so they must pass through without random state noise.
+        if self.obs_key not in data or "actions" not in data:
             return data
 
         obs = data[self.obs_key]
