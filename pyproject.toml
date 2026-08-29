@@ -25,6 +25,7 @@ dependencies = [
     "openpi-client",
     "orbax-checkpoint==0.11.13",
     "pillow>=11.0.0",
+    "pyzmq>=26.0.0",
     "sentencepiece>=0.2.0",
     "torch==2.7.1",
     "tqdm-loggable>=0.2",

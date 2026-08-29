@@ -2,12 +2,15 @@ import dataclasses
 import enum
 import logging
 import socket
+from typing import Literal
 
 import tyro
 
 from openpi.policies import policy as _policy
 from openpi.policies import policy_config as _policy_config
+from openpi.serving import astribot_policy_adapter
 from openpi.serving import websocket_policy_server
+from openpi.serving import zmq_policy_server
 from openpi.training import config as _config
 
 
@@ -48,6 +51,14 @@ class Args:
 
     # Port to serve the policy on.
     port: int = 8000
+    # Wire transport. ZMQ is the Astribot Orin streaming transport.
+    transport: Literal["websocket", "zmq"] = "websocket"
+    # Maximum policy inference frequency for the latest-value ZMQ scheduler.
+    max_inference_hz: float = 10.0
+    # Number of model action rows retained for ZMQ temporal ensembling.
+    action_horizon: int = 64
+    # ACT temporal ensemble coefficient. Positive values weight older chunks more.
+    ensemble_decay: float = 0.01
     # Record the policy's behavior for debugging.
     record: bool = False
 
@@ -108,12 +119,30 @@ def main(args: Args) -> None:
     local_ip = socket.gethostbyname(hostname)
     logging.info("Creating server (host: %s, ip: %s)", hostname, local_ip)
 
-    server = websocket_policy_server.WebsocketPolicyServer(
-        policy=policy,
-        host="0.0.0.0",
-        port=args.port,
-        metadata=policy_metadata,
-    )
+    if args.transport == "zmq":
+        if not isinstance(args.policy, Checkpoint) or args.policy.config != "pi05_astribot_light_candle":
+            raise ValueError("--transport=zmq currently supports pi05_astribot_light_candle only")
+        adapter = astribot_policy_adapter.AstribotPolicyAdapter(
+            policy,
+            checkpoint_id=f"{args.policy.config}:{args.policy.dir}",
+            default_prompt=args.default_prompt,
+            action_horizon=args.action_horizon,
+            ensemble_decay=args.ensemble_decay,
+        )
+        server = zmq_policy_server.ZmqPolicyServer(
+            policy=adapter,
+            host="0.0.0.0",
+            port=args.port,
+            metadata=adapter.metadata,
+            max_inference_hz=args.max_inference_hz,
+        )
+    else:
+        server = websocket_policy_server.WebsocketPolicyServer(
+            policy=policy,
+            host="0.0.0.0",
+            port=args.port,
+            metadata=policy_metadata,
+        )
     server.serve_forever()
 
 

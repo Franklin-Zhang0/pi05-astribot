@@ -137,6 +137,37 @@ normalization statistics embedded in the checkpoint. It does not copy or modify 
 assets. The response contract is `(64, 52)` actions ordered as torso (4), left arm (7), right
 arm (7), head (2), left-hand driver joints (16), and right-hand driver joints (16).
 
+For the current Orin streaming client, use the ZMQ transport. The server returns one
+canonical 55-element action per frame, keeps only the newest observation, and limits policy
+calls to the configured rate. It applies ACT-style temporal ensembling to the configured
+number of action rows. `ENSEMBLE_DECAY` is the exponential coefficient: each newer
+surviving prediction is weighted by `exp(-ENSEMBLE_DECAY * i)` relative to the oldest.
+
+```bash
+env OPENPI_DATA_HOME=/data_disk/astribot_runtime/openpi_cache \
+  JAX_COMPILATION_CACHE_DIR=/data_disk/astribot_runtime/jax_cache \
+  TRANSPORT=zmq MAX_INFERENCE_HZ=10 ACTION_HORIZON=64 ENSEMBLE_DECAY=0.01 \
+  bash astribot_scripts/serve_policy_astribot.sh \
+  /data_disk/checkpoints/astribot/astribot-light-candle-20260827-235217/10000 \
+  5555
+```
+
+Set the Orin policy client to `transport=zmq` and
+`server_uri=zmq://<policy-server-ip>:5555`. Its camera selection may provide either
+`head_rgbd` or `head_stereo`; the adapter maps both to the trained head input and crops
+stereo before the model resize.
+
+Replay the HDF5 dummy client against a running ZMQ server and write metrics:
+
+```bash
+.venv/bin/python examples/astribot/infer_hdf5_serving.py \
+  --transport zmq \
+  --host 127.0.0.1 \
+  --port 5555 \
+  --hdf5 /data_disk/datasets/task_candle_0826/task_candle_0826_episode_146.hdf5 \
+  --result-json /data_disk/astribot_runtime/hdf5_zmq_full.json
+```
+
 Run a checkpoint-backed smoke test before connecting a robot:
 
 ```bash
@@ -151,9 +182,9 @@ openpi/.venv/bin/python openpi/examples/astribot/infer_checkpoint_sanity.py \
 Pass `--policy-host 127.0.0.1 --policy-port 8000` to validate a running websocket server
 instead of loading the checkpoint in the smoke-test process.
 
-Live observations must contain a 52-D joint state in the same order. Use the left half of
-`head_stereo` (crop before resizing), plus both wrist cameras. Proprioceptive noise remains a
-training-only augmentation and is not injected by the serving policy.
+Live observations must contain a 52-D joint state in the same order. Use `head_rgbd` or the
+left half of `head_stereo` (crop before resizing), plus both wrist cameras. Proprioceptive
+noise remains a training-only augmentation and is not injected by the serving policy.
 
 ---
 
