@@ -679,6 +679,58 @@ _CONFIGS = [
     ),
 
     TrainConfig(
+        name="pi05_astribot_light_candle_trim5s_both",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=64,
+            action_horizon=64,
+        ),
+        data=SimpleDataConfig(
+            repo_id="astribot/astribot_light_candle_trim5s_both_lerobot",
+            assets=AssetsConfig(asset_id="astribot/astribot_light_candle_trim5s_both_lerobot"),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[astribot_policy.AstribotInputs(model_type=ModelType.PI05)],
+                outputs=[astribot_policy.AstribotOutputs(action_dim=52)],
+            ).push(
+                inputs=[_transforms.DeltaActions(_transforms.make_bool_mask(20, -32))],
+                outputs=[_transforms.AbsoluteActions(_transforms.make_bool_mask(20, -32))],
+            ).push(
+                inputs=[_transforms.JointPositionNoiseCompensateActions(obs_key="state", std=0.001)],
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "observation/head_rgbd": "images.head",
+                                "observation/left_wrist_rgbd": "images.left_wrist",
+                                "observation/right_wrist_rgbd": "images.right_wrist",
+                                "observation/joint_position": "state",
+                                "actions": "actions",
+                                "prompt": "task",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("actions",),
+            ),
+        ),
+        weight_loader=weight_loaders.ExpandedActionDimCheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        assets_base_dir="/data2/202608/astribot/training_artifacts/assets",
+        checkpoint_base_dir="/data2/202608/astribot/checkpoints",
+        batch_size=64,
+        num_train_steps=20_001,
+        save_interval=10_000,
+        keep_period=10_000,
+        log_interval=100,
+        num_workers=16,
+        fsdp_devices=8,
+    ),
+
+    TrainConfig(
         name="pi05_astribot_scratch",
         # Full fine-tuning version for Astribot.
         model=pi0_config.Pi0Config(

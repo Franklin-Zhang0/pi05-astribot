@@ -8,10 +8,16 @@ if [[ "${MODE}" != "--dry-run" && "${MODE}" != "--submit" ]]; then
 fi
 
 STAMP=$(date -u +%Y%m%d-%H%M%S)
-RUN_TAG="astribot-light-candle-${STAMP}"
-JOB_NAME="astribot-light-candle-${STAMP}"
+RUN_PREFIX="${RUN_PREFIX:-astribot-light-candle}"
+RUN_TAG="${RUN_PREFIX}-${STAMP}"
+JOB_NAME="${RUN_TAG}"
+TRAIN_CONFIG="${TRAIN_CONFIG:-pi05_astribot_light_candle}"
+DATASET_ROOT="${DATASET_ROOT:-/data2/202608/astribot/astribot_light_candle_lerobot}"
+DATASET_REPO_ID="${DATASET_REPO_ID:-astribot/astribot_light_candle_lerobot}"
+TRIM_START_SECONDS="${TRIM_START_SECONDS:-0}"
+TRIM_END_SECONDS="${TRIM_END_SECONDS:-5}"
 REMOTE_ENTRY=/data/250010203/franklin/project/pi_astribot_finetune/openpi/astribot_scripts/train_light_candle_acp.sh
-COMMAND="export RUN_TAG=${RUN_TAG}; bash ${REMOTE_ENTRY}"
+COMMAND="export RUN_TAG=${RUN_TAG} TRAIN_CONFIG=${TRAIN_CONFIG} DATASET_ROOT=${DATASET_ROOT} DATASET_REPO_ID=${DATASET_REPO_ID} TRIM_START_SECONDS=${TRIM_START_SECONDS} TRIM_END_SECONDS=${TRIM_END_SECONDS}; bash ${REMOTE_ENTRY}"
 
 UV_CACHE_DIR=/tmp/uv-cache uv run --no-project python \
   /data/250010203/franklin/project/pi_astribot_finetune/openpi/astribot_scripts/acp_create_light_candle.py \
