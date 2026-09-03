@@ -16,8 +16,9 @@ DATASET_ROOT="${DATASET_ROOT:-/data2/202608/astribot/astribot_light_candle_lerob
 DATASET_REPO_ID="${DATASET_REPO_ID:-astribot/astribot_light_candle_lerobot}"
 TRIM_START_SECONDS="${TRIM_START_SECONDS:-0}"
 TRIM_END_SECONDS="${TRIM_END_SECONDS:-5}"
+FRAME_STRIDE="${FRAME_STRIDE:-1}"
 REMOTE_ENTRY=/data/250010203/franklin/project/pi_astribot_finetune/openpi/astribot_scripts/train_light_candle_acp.sh
-COMMAND="export RUN_TAG=${RUN_TAG} TRAIN_CONFIG=${TRAIN_CONFIG} DATASET_ROOT=${DATASET_ROOT} DATASET_REPO_ID=${DATASET_REPO_ID} TRIM_START_SECONDS=${TRIM_START_SECONDS} TRIM_END_SECONDS=${TRIM_END_SECONDS}; bash ${REMOTE_ENTRY}"
+COMMAND="export RUN_TAG=${RUN_TAG} TRAIN_CONFIG=${TRAIN_CONFIG} DATASET_ROOT=${DATASET_ROOT} DATASET_REPO_ID=${DATASET_REPO_ID} TRIM_START_SECONDS=${TRIM_START_SECONDS} TRIM_END_SECONDS=${TRIM_END_SECONDS} FRAME_STRIDE=${FRAME_STRIDE}; bash ${REMOTE_ENTRY}"
 
 UV_CACHE_DIR=/tmp/uv-cache uv run --no-project python \
   /data/250010203/franklin/project/pi_astribot_finetune/openpi/astribot_scripts/acp_create_light_candle.py \

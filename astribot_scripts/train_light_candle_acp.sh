@@ -8,6 +8,7 @@ DATASET_REPO_ID="${DATASET_REPO_ID:-astribot/astribot_light_candle_lerobot}"
 TRAIN_CONFIG="${TRAIN_CONFIG:-pi05_astribot_light_candle}"
 TRIM_START_SECONDS="${TRIM_START_SECONDS:-0}"
 TRIM_END_SECONDS="${TRIM_END_SECONDS:-5}"
+FRAME_STRIDE="${FRAME_STRIDE:-1}"
 RUN_TAG="${RUN_TAG:-astribot-light-candle-$(date -u +%Y%m%d-%H%M%S)}"
 RUN_ROOT="/data2/202608/astribot/training_artifacts/runs/${RUN_TAG}"
 LOG_FILE="${RUN_ROOT}/acp_entry.log"
@@ -35,6 +36,7 @@ echo "SOURCE_ROOT=${SOURCE_ROOT}"
 echo "DATASET_ROOT=${DATASET_ROOT}"
 echo "DATASET_REPO_ID=${DATASET_REPO_ID}"
 echo "TRIM_CONTRACT start_seconds=${TRIM_START_SECONDS} end_seconds=${TRIM_END_SECONDS}"
+echo "SAMPLING_CONTRACT frame_stride=${FRAME_STRIDE} fps=30 delta_after_subsample=true"
 echo "TRAIN_CONTRACT config=${TRAIN_CONFIG} steps=20001 save_interval=10000 keep_period=10000 fsdp_devices=8 proprio_noise_std=0.001"
 
 test -d "${PROJECT_DIR}"
@@ -87,7 +89,7 @@ git -c safe.directory="${PROJECT_DIR}" status --short
 DATASET_READY=0
 CONVERSION_APPEND_RESUME=0
 if [[ -f "${DATASET_ROOT}/conversion_complete.json" ]]; then
-  if DATASET_ROOT="${DATASET_ROOT}" DATASET_REPO_ID="${DATASET_REPO_ID}" TRIM_START_SECONDS="${TRIM_START_SECONDS}" TRIM_END_SECONDS="${TRIM_END_SECONDS}" "${PYTHON}" -c 'import json, os, pathlib; m=json.loads((pathlib.Path(os.environ["DATASET_ROOT"])/"conversion_complete.json").read_text()); expected_trim={"start":float(os.environ["TRIM_START_SECONDS"]),"end":float(os.environ["TRIM_END_SECONDS"]),"basis":"recorded_time"}; assert m.get("status")=="complete"; assert m.get("repo_id")==os.environ["DATASET_REPO_ID"]; assert m.get("head_camera")=={"source":"head_stereo","view":"left","crop":"left_half_before_resize"}; assert m.get("time_trim_seconds")==expected_trim'; then
+  if DATASET_ROOT="${DATASET_ROOT}" DATASET_REPO_ID="${DATASET_REPO_ID}" TRIM_START_SECONDS="${TRIM_START_SECONDS}" TRIM_END_SECONDS="${TRIM_END_SECONDS}" FRAME_STRIDE="${FRAME_STRIDE}" "${PYTHON}" -c 'import json, os, pathlib; m=json.loads((pathlib.Path(os.environ["DATASET_ROOT"])/"conversion_complete.json").read_text()); expected_trim={"start":float(os.environ["TRIM_START_SECONDS"]),"end":float(os.environ["TRIM_END_SECONDS"]),"basis":"recorded_time"}; assert m.get("status")=="complete"; assert m.get("repo_id")==os.environ["DATASET_REPO_ID"]; assert m.get("frame_stride")==int(os.environ["FRAME_STRIDE"]); assert m.get("head_camera")=={"source":"head_stereo","view":"left","crop":"left_half_before_resize"}; assert m.get("time_trim_seconds")==expected_trim'; then
     DATASET_READY=1
     echo "CONVERSION_REUSE marker=${DATASET_ROOT}/conversion_complete.json"
   fi
@@ -114,6 +116,7 @@ if [[ "${DATASET_READY}" -eq 0 ]]; then
     --default-task "Light the candle"
     --trim-start-seconds "${TRIM_START_SECONDS}"
     --trim-end-seconds "${TRIM_END_SECONDS}"
+    --frame-stride "${FRAME_STRIDE}"
     --decode-workers 48
     --image-writer-processes 16
     --image-writer-threads 4
@@ -125,7 +128,7 @@ if [[ "${DATASET_READY}" -eq 0 ]]; then
   "${PYTHON}" examples/astribot/convert_astribot_v4_dexhand_to_lerobot.py "${CONVERT_ARGS[@]}"
 fi
 
-DATASET_ROOT="${DATASET_ROOT}" DATASET_REPO_ID="${DATASET_REPO_ID}" TRIM_START_SECONDS="${TRIM_START_SECONDS}" TRIM_END_SECONDS="${TRIM_END_SECONDS}" "${PYTHON}" -c 'import json, os, pathlib; p=pathlib.Path(os.environ["DATASET_ROOT"])/"conversion_complete.json"; m=json.loads(p.read_text()); expected_trim={"start":float(os.environ["TRIM_START_SECONDS"]),"end":float(os.environ["TRIM_END_SECONDS"]),"basis":"recorded_time"}; assert m["status"]=="complete"; assert m["repo_id"]==os.environ["DATASET_REPO_ID"]; assert m["state_dim"]==52 and m["action_dim"]==52; assert m["converted_episodes"]>0 and m["converted_frames"]>0; assert m["head_camera"]=={"source":"head_stereo","view":"left","crop":"left_half_before_resize"}; assert m["time_trim_seconds"]==expected_trim; print({k:m[k] for k in ("status","repo_id","converted_episodes","converted_frames","state_dim","action_dim","head_camera","time_trim_seconds")})'
+DATASET_ROOT="${DATASET_ROOT}" DATASET_REPO_ID="${DATASET_REPO_ID}" TRIM_START_SECONDS="${TRIM_START_SECONDS}" TRIM_END_SECONDS="${TRIM_END_SECONDS}" FRAME_STRIDE="${FRAME_STRIDE}" "${PYTHON}" -c 'import json, os, pathlib; p=pathlib.Path(os.environ["DATASET_ROOT"])/"conversion_complete.json"; m=json.loads(p.read_text()); expected_trim={"start":float(os.environ["TRIM_START_SECONDS"]),"end":float(os.environ["TRIM_END_SECONDS"]),"basis":"recorded_time"}; assert m["status"]=="complete"; assert m["repo_id"]==os.environ["DATASET_REPO_ID"]; assert m["frame_stride"]==int(os.environ["FRAME_STRIDE"]); assert m["state_dim"]==52 and m["action_dim"]==52; assert m["converted_episodes"]>0 and m["converted_frames"]>0; assert m["head_camera"]=={"source":"head_stereo","view":"left","crop":"left_half_before_resize"}; assert m["time_trim_seconds"]==expected_trim; print({k:m[k] for k in ("status","repo_id","converted_episodes","converted_frames","frame_stride","state_dim","action_dim","head_camera","time_trim_seconds")})'
 
 NORM_STATS_FILE="/data2/202608/astribot/training_artifacts/assets/${TRAIN_CONFIG}/${DATASET_REPO_ID}/norm_stats.json"
 validate_norm_stats() {
