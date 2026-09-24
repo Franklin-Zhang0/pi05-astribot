@@ -157,6 +157,34 @@ Set the Orin policy client to `transport=zmq` and
 `head_rgbd` or `head_stereo`; the adapter maps both to the trained head input and crops
 stereo before the model resize.
 
+### Stock-gripper serving
+
+Stock-gripper checkpoints use `pi05_astribot_full_finetune` (or another config
+whose Astribot output is the 25-D dataset order) and must be started explicitly
+with `END_EFFECTOR=gripper`. The adapter maps chassis/torso/arms/head into the
+canonical body action and sends the two prismatic positions in a separate
+`gripper.position_mm` envelope. Orin publishes that envelope through its
+existing SDK bridge; it is not sent through the ApexHand relay.
+
+```bash
+END_EFFECTOR=gripper TRANSPORT=zmq \
+  bash astribot_scripts/serve_policy_astribot.sh \
+  /data_disk/checkpoints/astribot/gripper/<checkpoint-step> 5555 \
+  pi05_astribot_full_finetune "<task prompt>"
+```
+
+The wrapper checks both `params/` and checkpoint-owned normalization stats
+before loading. Do not reuse an ApexHand checkpoint for this mode.
+
+Before loading any checkpoint, run the hardware-free checks:
+
+```bash
+astribot_scripts/check_policy_host.sh
+export PYTHONPATH="$PWD/src:$PWD/packages/openpi-client/src"
+/data_disk/astribot_runtime/openpi-policy-venv/bin/python \
+  astribot_scripts/policy_protocol_smoke.py
+```
+
 Replay the HDF5 dummy client against a running ZMQ server and write metrics:
 
 ```bash
