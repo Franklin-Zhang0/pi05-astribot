@@ -14,6 +14,7 @@ from PIL import Image
 from openpi.serving.astribot_policy_schema import ACTION_DIM
 from openpi.serving.astribot_policy_schema import BODY_ACTION_SLICE
 from openpi.serving.astribot_policy_schema import CANONICAL_BODY_JOINTS
+from openpi.serving.astribot_policy_schema import GRIPPER_JOINTS
 from openpi.serving.astribot_policy_schema import HAND_CONTROL_JOINTS
 from openpi.serving.astribot_policy_schema import LEFT_HAND_ACTION_SLICE
 from openpi.serving.astribot_policy_schema import POLICY_PROTOCOL_VERSION
@@ -38,6 +39,18 @@ MODEL_RIGHT_ARM_SLICE = slice(11, 18)
 MODEL_HEAD_SLICE = slice(18, 20)
 MODEL_LEFT_HAND_SLICE = slice(20, 36)
 MODEL_RIGHT_HAND_SLICE = slice(36, 52)
+
+# Stock-gripper checkpoints use the 25-D dataset order: chassis, torso, left
+# arm, left gripper, right arm, right gripper, head. Their prismatic outputs
+# are carried in a separate wire envelope.
+GRIPPER_MODEL_ACTION_DIM = 25
+GRIPPER_MODEL_CHASSIS_SLICE = slice(0, 3)
+GRIPPER_MODEL_TORSO_SLICE = slice(3, 7)
+GRIPPER_MODEL_LEFT_ARM_SLICE = slice(7, 14)
+GRIPPER_MODEL_LEFT_GRIPPER_INDEX = 14
+GRIPPER_MODEL_RIGHT_ARM_SLICE = slice(15, 22)
+GRIPPER_MODEL_RIGHT_GRIPPER_INDEX = 22
+GRIPPER_MODEL_HEAD_SLICE = slice(23, 25)
 
 # The checkpoint predicts every canonical action except the three chassis
 # joints.  This mask is separate from the per-observation control mask: a
@@ -66,12 +79,15 @@ class ACTTemporalEnsembler:
     smaller weights, matching ACT's online ensembler.
     """
 
-    def __init__(self, action_horizon: int, ensemble_decay: float) -> None:
+    def __init__(self, action_horizon: int, ensemble_decay: float, *, action_dim: int = ACTION_DIM) -> None:
         if isinstance(action_horizon, bool) or not isinstance(action_horizon, int | np.integer) or action_horizon < 1:
             raise ValueError("action_horizon must be a positive integer")
         if not np.isfinite(ensemble_decay):
             raise ValueError("ensemble_decay must be finite")
         self._action_horizon = int(action_horizon)
+        if isinstance(action_dim, bool) or not isinstance(action_dim, int | np.integer) or action_dim < 1:
+            raise ValueError("action_dim must be a positive integer")
+        self._action_dim = int(action_dim)
         self._ensemble_decay = float(ensemble_decay)
         self._history: dict[tuple[str, int], list[_ActionPrediction]] = {}
         self._last_sequences: dict[tuple[str, int], int] = {}
@@ -83,6 +99,10 @@ class ACTTemporalEnsembler:
     @property
     def ensemble_decay(self) -> float:
         return self._ensemble_decay
+
+    @property
+    def action_dim(self) -> int:
+        return self._action_dim
 
     def reset(self, session_id: str | None = None) -> None:
         if session_id is None:
@@ -109,18 +129,18 @@ class ACTTemporalEnsembler:
         if sequence < 0:
             raise ValueError("sequence must be non-negative")
         actions = np.asarray(actions, dtype=np.float64)
-        if actions.ndim != 2 or actions.shape[1] != ACTION_DIM or not 1 <= actions.shape[0] <= self._action_horizon:
+        if actions.ndim != 2 or actions.shape[1] != self._action_dim or not 1 <= actions.shape[0] <= self._action_horizon:
             raise ValueError(
-                f"actions must have shape (1..{self._action_horizon}, {ACTION_DIM}), got {actions.shape}"
+                f"actions must have shape (1..{self._action_horizon}, {self._action_dim}), got {actions.shape}"
             )
         if not np.isfinite(actions).all():
             raise ValueError("actions contain NaN or infinity")
         enabled_mask = np.asarray(enabled_mask, dtype=np.bool_).reshape(-1)
-        if enabled_mask.shape != (ACTION_DIM,):
-            raise ValueError(f"enabled_mask must contain {ACTION_DIM} values")
+        if enabled_mask.shape != (self._action_dim,):
+            raise ValueError(f"enabled_mask must contain {self._action_dim} values")
         hold_action = np.asarray(hold_action, dtype=np.float64).reshape(-1)
-        if hold_action.shape != (ACTION_DIM,) or not np.isfinite(hold_action).all():
-            raise ValueError(f"hold_action must contain {ACTION_DIM} finite values")
+        if hold_action.shape != (self._action_dim,) or not np.isfinite(hold_action).all():
+            raise ValueError(f"hold_action must contain {self._action_dim} finite values")
 
         key = (str(session_id), int(control_epoch))
         history = self._history.get(key, [])
@@ -278,6 +298,36 @@ def model_state_from_wire(request: Mapping[str, object]) -> np.ndarray:
     return state.astype(np.float32)
 
 
+def _wire_gripper_measurements(request: Mapping[str, object]) -> np.ndarray:
+    observation = _observation_payload(request)
+    values: list[float] = []
+    for side, joint_name in zip(("left", "right"), GRIPPER_JOINTS, strict=True):
+        component = observation.get(f"gripper_{side}")
+        if not isinstance(component, Mapping) or not bool(component.get("valid", False)):
+            raise ValueError(f"observation.gripper_{side} is missing or invalid")
+        single = canonical_vector(
+            component.get("joint_names", ()),
+            component.get("position", ()),
+            (joint_name,),
+            field=f"observation.gripper_{side}.position",
+        )
+        if not 0.0 <= float(single[0]) <= 100.0:
+            raise ValueError(f"observation.gripper_{side}.position must be within [0, 100] mm")
+        values.append(float(single[0]))
+    return np.asarray(values, dtype=np.float64)
+
+
+def gripper_model_state_from_wire(request: Mapping[str, object]) -> np.ndarray:
+    """Convert canonical measured state to the 25-D stock-gripper layout."""
+
+    body, _, _ = _wire_measurements(request)
+    grippers = _wire_gripper_measurements(request)
+    state = np.concatenate((body[:3], body[3:7], body[9:16], grippers[:1], body[16:23], grippers[1:], body[7:9]))
+    if state.shape != (GRIPPER_MODEL_ACTION_DIM,):
+        raise AssertionError(f"unexpected gripper model state shape {state.shape}")
+    return state.astype(np.float32)
+
+
 def hold_action_from_wire(request: Mapping[str, object]) -> np.ndarray:
     """Build a full canonical action from measured state only."""
 
@@ -329,6 +379,45 @@ def map_model_action_to_canonical(
     return action
 
 
+def map_gripper_model_action(
+    model_action: np.ndarray,
+    hold_action: np.ndarray,
+    enabled_mask: np.ndarray,
+    hold_gripper: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map one 25-D stock-gripper action to body and millimetre outputs."""
+
+    model_action = np.asarray(model_action, dtype=np.float64).reshape(-1)
+    if model_action.shape != (GRIPPER_MODEL_ACTION_DIM,):
+        raise ValueError(
+            f"gripper model action must contain {GRIPPER_MODEL_ACTION_DIM} values, got {model_action.shape}"
+        )
+    hold_action = np.asarray(hold_action, dtype=np.float64).reshape(-1)
+    enabled_mask = np.asarray(enabled_mask, dtype=np.bool_).reshape(-1)
+    hold_gripper = np.asarray(hold_gripper, dtype=np.float64).reshape(-1)
+    if hold_action.shape != (ACTION_DIM,) or enabled_mask.shape != (ACTION_DIM,):
+        raise ValueError("invalid canonical hold action or enabled mask")
+    if hold_gripper.shape != (2,) or not np.isfinite(hold_gripper).all():
+        raise ValueError("hold gripper action must contain two finite values")
+    if not np.isfinite(model_action).all():
+        raise ValueError("gripper model action contains NaN or infinity")
+
+    action = hold_action.copy()
+    action[0:3] = model_action[GRIPPER_MODEL_CHASSIS_SLICE]
+    action[3:7] = model_action[GRIPPER_MODEL_TORSO_SLICE]
+    action[9:16] = model_action[GRIPPER_MODEL_LEFT_ARM_SLICE]
+    action[16:23] = model_action[GRIPPER_MODEL_RIGHT_ARM_SLICE]
+    action[7:9] = model_action[GRIPPER_MODEL_HEAD_SLICE]
+    action[~enabled_mask] = hold_action[~enabled_mask]
+    gripper = np.asarray(
+        [model_action[GRIPPER_MODEL_LEFT_GRIPPER_INDEX], model_action[GRIPPER_MODEL_RIGHT_GRIPPER_INDEX]],
+        dtype=np.float64,
+    )
+    if np.any(gripper < 0.0) or np.any(gripper > 100.0):
+        raise ValueError(f"gripper model action is outside [0, 100] mm: {gripper}")
+    return action, gripper
+
+
 class AstribotPolicyAdapter:
     """Adapt the documented Orin envelope to an OpenPI Astribot policy."""
 
@@ -340,6 +429,7 @@ class AstribotPolicyAdapter:
         default_prompt: str | None = None,
         action_horizon: int | None = None,
         ensemble_decay: float = 0.01,
+        end_effector: str = "apexhand",
     ) -> None:
         if action_horizon is not None:
             if (
@@ -352,12 +442,21 @@ class AstribotPolicyAdapter:
         if not np.isfinite(ensemble_decay):
             raise ValueError("ensemble_decay must be finite")
         self._policy = policy
+        self._end_effector = str(end_effector).strip().lower()
+        if self._end_effector not in {"apexhand", "gripper"}:
+            raise ValueError("end_effector must be 'apexhand' or 'gripper'")
         self._default_prompt = default_prompt
         self._configured_action_horizon = action_horizon
         self._ensemble_decay = float(ensemble_decay)
         self._ensembler = (
             ACTTemporalEnsembler(action_horizon, self._ensemble_decay) if action_horizon is not None else None
         )
+        self._gripper_ensembler: ACTTemporalEnsembler | None = (
+            ACTTemporalEnsembler(action_horizon, self._ensemble_decay, action_dim=2)
+            if self._end_effector == "gripper" and action_horizon is not None
+            else None
+        )
+        self._last_gripper_action: np.ndarray | None = None
         policy_metadata = getattr(policy, "metadata", {}) or {}
         self._metadata = {
             **dict(policy_metadata),
@@ -369,17 +468,23 @@ class AstribotPolicyAdapter:
             "action_ensembling": "act_temporal",
             "action_horizon": action_horizon if action_horizon is not None else "model_native",
             "ensemble_decay": self._ensemble_decay,
+            "end_effector": self._end_effector,
         }
 
     @property
     def metadata(self) -> dict[str, object]:
         return dict(self._metadata)
 
+    @property
+    def last_gripper_action(self) -> np.ndarray | None:
+        return None if self._last_gripper_action is None else self._last_gripper_action.copy()
+
     def infer_observation(self, request: Mapping[str, object]) -> tuple[np.ndarray, dict[str, float]]:
         """Run one inference and return an ensembled canonical action plus timing."""
 
         started = time.perf_counter()
         hold_action = hold_action_from_wire(request)
+        hold_gripper = _wire_gripper_measurements(request) if self._end_effector == "gripper" else None
         policy_observation = self._policy_observation(request)
         policy_output = self._policy.infer(policy_observation)
         model_actions = np.asarray(policy_output.get("actions"), dtype=np.float64)
@@ -387,8 +492,9 @@ class AstribotPolicyAdapter:
             model_actions = model_actions[None, :]
         elif model_actions.ndim != 2:
             raise ValueError(f"policy actions must be 1-D or 2-D, got {model_actions.shape}")
-        if model_actions.shape[1] != MODEL_ACTION_DIM:
-            raise ValueError(f"policy actions must contain {MODEL_ACTION_DIM} values per row, got {model_actions.shape}")
+        expected_model_dim = GRIPPER_MODEL_ACTION_DIM if self._end_effector == "gripper" else MODEL_ACTION_DIM
+        if model_actions.shape[1] != expected_model_dim:
+            raise ValueError(f"policy actions must contain {expected_model_dim} values per row, got {model_actions.shape}")
         if model_actions.shape[0] == 0:
             raise ValueError("policy returned an empty action chunk")
         if self._configured_action_horizon is not None:
@@ -407,9 +513,18 @@ class AstribotPolicyAdapter:
             )
 
         enabled_mask = _enabled_action_mask(request)
-        predicted_actions = np.stack(
-            [map_model_action_to_canonical(row, hold_action, POLICY_ACTION_MASK) for row in model_actions]
-        )
+        if self._end_effector == "gripper":
+            assert hold_gripper is not None
+            predicted_pairs = [
+                map_gripper_model_action(row, hold_action, enabled_mask, hold_gripper) for row in model_actions
+            ]
+            predicted_actions = np.stack([pair[0] for pair in predicted_pairs])
+            predicted_grippers = np.stack([pair[1] for pair in predicted_pairs])
+        else:
+            predicted_actions = np.stack(
+                [map_model_action_to_canonical(row, hold_action, POLICY_ACTION_MASK) for row in model_actions]
+            )
+            predicted_grippers = None
         try:
             sequence = int(request.get("request_sequence", 0))
             control_epoch = int(request.get("control_epoch", 0))
@@ -420,9 +535,30 @@ class AstribotPolicyAdapter:
             control_epoch=control_epoch,
             sequence=sequence,
             actions=predicted_actions,
-            enabled_mask=enabled_mask & POLICY_ACTION_MASK,
+            enabled_mask=enabled_mask & (np.ones(ACTION_DIM, dtype=np.bool_) if self._end_effector == "gripper" else POLICY_ACTION_MASK),
             hold_action=hold_action,
         )
+        if predicted_grippers is not None:
+            if self._gripper_ensembler is None:
+                self._gripper_ensembler = ACTTemporalEnsembler(predicted_grippers.shape[0], self._ensemble_decay, action_dim=2)
+            elif predicted_grippers.shape[0] != self._gripper_ensembler.action_horizon:
+                raise ValueError("policy gripper action horizon changed")
+            enabled_grippers = request.get("enabled_grippers", {})
+            if not isinstance(enabled_grippers, Mapping):
+                raise ValueError("enabled_grippers must be a mapping")
+            self._last_gripper_action = self._gripper_ensembler.update(
+                session_id=str(request.get("session_id", "default")),
+                control_epoch=control_epoch,
+                sequence=sequence,
+                actions=predicted_grippers,
+                enabled_mask=np.asarray(
+                    [bool(enabled_grippers.get(side, False)) for side in ("left", "right")],
+                    dtype=np.bool_,
+                ),
+                hold_action=hold_gripper,
+            )
+        else:
+            self._last_gripper_action = None
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         timing = {"infer_ms": elapsed_ms}
         policy_timing = policy_output.get("policy_timing", {})
@@ -447,7 +583,11 @@ class AstribotPolicyAdapter:
 
         policy_observation: dict[str, object] = {
             "observation/head_rgbd": decode_camera_payload(head_camera, head),
-            "observation/joint_position": model_state_from_wire(request),
+            "observation/joint_position": (
+                gripper_model_state_from_wire(request)
+                if self._end_effector == "gripper"
+                else model_state_from_wire(request)
+            ),
         }
         for camera, key in (
             ("left_wrist_rgbd", "observation/left_wrist_rgbd"),

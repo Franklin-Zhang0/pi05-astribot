@@ -292,6 +292,15 @@ class ZmqPolicyServer:
                     **timing_payload,
                 },
             }
+            gripper_action = getattr(self._policy, "last_gripper_action", None)
+            if gripper_action is not None:
+                values = np.asarray(gripper_action, dtype=np.float32).reshape(-1)
+                if values.shape != (2,) or not np.isfinite(values).all():
+                    raise ValueError("policy returned an invalid gripper action")
+                response["gripper"] = {
+                    "joint_names": ["astribot_gripper_left", "astribot_gripper_right"],
+                    "position_mm": values,
+                }
             self._send(socket, session.identity, response)
             session.action_sequence += 1
         except Exception as exc:

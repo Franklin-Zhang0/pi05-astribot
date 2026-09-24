@@ -37,6 +37,11 @@ HAND_STATE_JOINTS = tuple(
     [f"thumb_j{index}" for index in range(5)]
     + [f"{finger}_j{index}" for finger in ("index", "middle", "ring", "pinky") for index in range(4)]
 )
+# Stock S1 grippers are prismatic and use millimetres. They remain outside
+# the legacy 55-D body/hand schema so ApexHand clients keep the same hash.
+GRIPPER_JOINTS = ("astribot_gripper_left", "astribot_gripper_right")
+GRIPPER_POSITION_MIN_MM = 0.0
+GRIPPER_POSITION_MAX_MM = 100.0
 CANONICAL_ACTION_JOINTS = (
     tuple(f"body/{name}" for name in CANONICAL_BODY_JOINTS)
     + tuple(f"hand_left/{name}" for name in HAND_CONTROL_JOINTS)
@@ -118,6 +123,20 @@ def hand_control_from_state(names: Sequence[str], values: Sequence[float], *, fi
     state = canonical_vector(names, values, HAND_STATE_JOINTS, field=field)
     state_index = {name: index for index, name in enumerate(HAND_STATE_JOINTS)}
     return np.asarray([state[state_index[name]] for name in HAND_CONTROL_JOINTS], dtype=np.float64)
+
+
+def canonical_gripper_vector(
+    names: Sequence[str], values: Sequence[float], *, field: str
+) -> np.ndarray:
+    """Validate and reorder the optional two-channel gripper vector."""
+
+    vector = canonical_vector(names, values, GRIPPER_JOINTS, field=field)
+    if np.any(vector < GRIPPER_POSITION_MIN_MM) or np.any(vector > GRIPPER_POSITION_MAX_MM):
+        raise ValueError(
+            f"{field}: positions must be within "
+            f"[{GRIPPER_POSITION_MIN_MM}, {GRIPPER_POSITION_MAX_MM}] mm"
+        )
+    return vector
 
 
 def normalize_control_scope(scope: str) -> str:

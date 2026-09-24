@@ -3,12 +3,16 @@ from typing import ClassVar
 
 import numpy as np
 from PIL import Image
+import pytest
 
+from openpi.serving.astribot_policy_adapter import GRIPPER_MODEL_ACTION_DIM
 from openpi.serving.astribot_policy_adapter import MODEL_ACTION_DIM
 from openpi.serving.astribot_policy_adapter import ACTTemporalEnsembler
 from openpi.serving.astribot_policy_adapter import AstribotPolicyAdapter
 from openpi.serving.astribot_policy_adapter import decode_camera_payload
+from openpi.serving.astribot_policy_adapter import gripper_model_state_from_wire
 from openpi.serving.astribot_policy_adapter import hold_action_from_wire
+from openpi.serving.astribot_policy_adapter import map_gripper_model_action
 from openpi.serving.astribot_policy_adapter import map_model_action_to_canonical
 from openpi.serving.astribot_policy_adapter import model_state_from_wire
 from openpi.serving.astribot_policy_schema import ACTION_DIM
@@ -255,3 +259,59 @@ def test_adapter_reorders_state_and_maps_policy_output() -> None:
     assert np.array_equal(action[:3], body_values[:3])
     assert np.array_equal(action[6], 1003.0)
     assert np.isfinite(action).all()
+
+
+def test_stock_gripper_layout_maps_body_and_mm_envelope() -> None:
+    request, body_values, _, _ = _request()
+    observation = dict(request["observation"])
+    observation["gripper_left"] = {
+        "valid": True,
+        "joint_names": ["astribot_gripper_left"],
+        "position": [12.0],
+    }
+    observation["gripper_right"] = {
+        "valid": True,
+        "joint_names": ["astribot_gripper_right"],
+        "position": [34.0],
+    }
+    request = {
+        **request,
+        "observation": observation,
+        "enabled_action_mask": enabled_action_mask(
+            control_scope="whole_body", body=True, left_hand=False, right_hand=False
+        ),
+        "enabled_grippers": {"left": True, "right": True},
+        "request_sequence": 0,
+        "session_id": "gripper-test",
+    }
+    expected_state = np.concatenate(
+        (body_values[:3], body_values[3:7], body_values[9:16], [12.0], body_values[16:23], [34.0], body_values[7:9])
+    ).astype(np.float32)
+    assert np.array_equal(gripper_model_state_from_wire(request), expected_state)
+
+    class GripperPolicy:
+        def infer(self, observation: dict[str, object]) -> dict[str, object]:
+            assert np.array_equal(observation["observation/joint_position"], expected_state)
+            return {"actions": (np.arange(GRIPPER_MODEL_ACTION_DIM, dtype=np.float32) + 1.0)[None, :]}
+
+    adapter = AstribotPolicyAdapter(GripperPolicy(), checkpoint_id="gripper-test", end_effector="gripper")
+    action, _ = adapter.infer_observation(request)
+    assert np.array_equal(action[:3], np.array([1.0, 2.0, 3.0]))
+    assert np.array_equal(action[3:7], np.array([4.0, 5.0, 6.0, 7.0]))
+    assert np.array_equal(action[9:16], np.arange(8.0, 15.0))
+    assert np.array_equal(action[16:23], np.arange(16.0, 23.0))
+    assert np.array_equal(action[7:9], np.array([24.0, 25.0]))
+    assert np.array_equal(adapter.last_gripper_action, np.array([15.0, 23.0]))
+
+
+def test_stock_gripper_mapping_holds_disabled_body_and_rejects_bad_mm() -> None:
+    hold = np.arange(ACTION_DIM, dtype=np.float64)
+    mask = np.ones(ACTION_DIM, dtype=np.bool_)
+    mask[:3] = False
+    model = np.arange(GRIPPER_MODEL_ACTION_DIM, dtype=np.float64)
+    action, gripper = map_gripper_model_action(model, hold, mask, np.array([10.0, 20.0]))
+    assert np.array_equal(action[:3], hold[:3])
+    assert np.array_equal(gripper, np.array([14.0, 22.0]))
+    model[14] = 101.0
+    with pytest.raises(ValueError, match=r"outside \[0, 100\]"):
+        map_gripper_model_action(model, hold, mask, np.array([10.0, 20.0]))

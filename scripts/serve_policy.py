@@ -59,6 +59,9 @@ class Args:
     action_horizon: int = 64
     # ACT temporal ensemble coefficient. Positive values weight older chunks more.
     ensemble_decay: float = 0.01
+    # Astribot output mode. Stock grippers use the separate millimetre envelope;
+    # ApexHand uses the 16-D driver-space hand channels.
+    end_effector: Literal["apexhand", "gripper"] = "apexhand"
     # Record the policy's behavior for debugging.
     record: bool = False
 
@@ -120,14 +123,15 @@ def main(args: Args) -> None:
     logging.info("Creating server (host: %s, ip: %s)", hostname, local_ip)
 
     if args.transport == "zmq":
-        if not isinstance(args.policy, Checkpoint) or args.policy.config != "pi05_astribot_light_candle":
-            raise ValueError("--transport=zmq currently supports pi05_astribot_light_candle only")
+        if not isinstance(args.policy, Checkpoint):
+            raise ValueError("--transport=zmq requires an explicit Astribot checkpoint")
         adapter = astribot_policy_adapter.AstribotPolicyAdapter(
             policy,
             checkpoint_id=f"{args.policy.config}:{args.policy.dir}",
             default_prompt=args.default_prompt,
             action_horizon=args.action_horizon,
             ensemble_decay=args.ensemble_decay,
+            end_effector=args.end_effector,
         )
         server = zmq_policy_server.ZmqPolicyServer(
             policy=adapter,

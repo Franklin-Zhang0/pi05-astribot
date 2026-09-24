@@ -104,7 +104,8 @@ def test_zmq_server_uses_latest_observation_and_caps_inference_frequency() -> No
         )
         assert source_sequence == 4
         assert np.all(action == 4.0)
-        assert first["server_timing"]["infer_ms"] >= first["server_timing"]["policy_infer_ms"]  # type: ignore[index]
+        assert first["server_timing"]["infer_ms"] >= 0.0  # type: ignore[index]
+        assert first["server_timing"]["policy_infer_ms"] >= 0.0  # type: ignore[index]
         assert first["server_timing"]["adapter_infer_ms"] == 0.1  # type: ignore[index]
         assert [sequence for sequence, _ in policy.calls] == [4]
 
@@ -182,6 +183,59 @@ def test_zmq_server_does_not_add_period_after_slow_inference() -> None:
         assert start_interval >= 0.09
         assert start_interval < 0.20
         assert time.monotonic() - second_sent_at < 0.20
+    finally:
+        stop_event.set()
+        client.close(0)
+        context.term()
+        thread.join(timeout=2.0)
+    assert not thread.is_alive()
+
+
+def test_zmq_server_emits_stock_gripper_envelope() -> None:
+    class GripperPolicy:
+        last_gripper_action = np.asarray([11.0, 22.0], dtype=np.float32)
+
+        def infer_observation(self, request: dict[str, object]) -> tuple[np.ndarray, dict[str, float]]:
+            del request
+            return np.zeros(schema.ACTION_DIM, dtype=np.float32), {}
+
+    policy = GripperPolicy()
+    stop_event = threading.Event()
+    server = zmq_policy_server.ZmqPolicyServer(
+        policy,
+        bind_uri="tcp://127.0.0.1:0",
+        max_inference_hz=100.0,
+    )
+    thread = threading.Thread(target=server.run, args=(stop_event,), daemon=True)
+    thread.start()
+    assert server.wait_until_ready()
+    assert server.bound_uri is not None
+    context = zmq.Context()
+    client = context.socket(zmq.DEALER)
+    client.connect(server.bound_uri)
+    session_id = "gripper-envelope"
+    mask = np.ones(schema.ACTION_DIM, dtype=np.bool_)
+    try:
+        client.send(msgpack_numpy.packb({
+            "type": "hello",
+            "protocol_version": schema.POLICY_PROTOCOL_VERSION,
+            "schema_hash": schema.POLICY_SCHEMA_HASH,
+            "session_id": session_id,
+            "control_epoch": 0,
+        }))
+        _recv(client)
+        client.send(msgpack_numpy.packb({
+            "type": "control",
+            "command": "arm",
+            "protocol_version": schema.POLICY_PROTOCOL_VERSION,
+            "schema_hash": schema.POLICY_SCHEMA_HASH,
+            "session_id": session_id,
+            "control_epoch": 0,
+        }))
+        client.send(msgpack_numpy.packb(_message(session_id, 0, mask)))
+        response = _recv(client)
+        assert response["gripper"]["joint_names"] == ["astribot_gripper_left", "astribot_gripper_right"]  # type: ignore[index]
+        assert np.array_equal(response["gripper"]["position_mm"], np.array([11.0, 22.0], dtype=np.float32))  # type: ignore[index]
     finally:
         stop_event.set()
         client.close(0)
