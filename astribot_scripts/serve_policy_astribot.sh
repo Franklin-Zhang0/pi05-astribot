@@ -12,9 +12,11 @@ PORT="${2:-8000}"
 if [[ "${END_EFFECTOR}" == "gripper" ]]; then
   DEFAULT_CONFIG=pi05_astribot_full_finetune
   DEFAULT_PROMPT_VALUE="${GRIPPER_PROMPT:-Execute the trained task}"
+  DEFAULT_ASSET_ID=astribot
 else
   DEFAULT_CONFIG=pi05_astribot_light_candle
   DEFAULT_PROMPT_VALUE="${APEXHAND_PROMPT:-Light the candle}"
+  DEFAULT_ASSET_ID=astribot/astribot_light_candle_lerobot
 fi
 POLICY_CONFIG="${3:-${POLICY_CONFIG:-${DEFAULT_CONFIG}}}"
 DEFAULT_PROMPT="${4:-${DEFAULT_PROMPT_VALUE}}"
@@ -22,7 +24,7 @@ TRANSPORT="${TRANSPORT:-websocket}"
 MAX_INFERENCE_HZ="${MAX_INFERENCE_HZ:-10.0}"
 ACTION_HORIZON="${ACTION_HORIZON:-64}"
 ENSEMBLE_DECAY="${ENSEMBLE_DECAY:-0.01}"
-ASSET_ID=astribot/astribot_light_candle_lerobot
+ASSET_ID="${ASSET_ID:-${DEFAULT_ASSET_ID}}"
 NORM_STATS="${CKPT_DIR}/assets/${ASSET_ID}/norm_stats.json"
 
 if [[ ! -d "${CKPT_DIR}/params" ]]; then
