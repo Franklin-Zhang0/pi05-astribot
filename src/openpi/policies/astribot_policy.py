@@ -90,3 +90,40 @@ class AstribotOutputs(transforms.DataTransformFn):
     def __call__(self, data: dict) -> dict:
         actions = np.asarray(data["actions"])
         return {"actions": actions[:, : self.action_dim]}
+
+
+@dataclasses.dataclass(frozen=True)
+class HKUGripperInputs(transforms.DataTransformFn):
+    """Map the HKU 25-D state and three-camera contract into OpenPI inputs."""
+
+    def __call__(self, data: dict) -> dict:
+        def image(key: str) -> np.ndarray:
+            return _parse_image(data[key])
+
+        output = {
+            "image": {
+                "base_0_rgb": image("observation/image"),
+                "left_wrist_0_rgb": image("observation/left_wrist_image"),
+                "right_wrist_0_rgb": image("observation/right_wrist_image"),
+            },
+            "image_mask": {
+                "base_0_rgb": np.True_,
+                "left_wrist_0_rgb": np.True_,
+                "right_wrist_0_rgb": np.True_,
+            },
+            "state": np.asarray(data["observation/state"], dtype=np.float32),
+        }
+        if "actions" in data:
+            output["actions"] = np.asarray(data["actions"], dtype=np.float32)
+        if "prompt" in data:
+            prompt = data["prompt"]
+            output["prompt"] = prompt.decode("utf-8") if isinstance(prompt, bytes) else prompt
+        return output
+
+
+@dataclasses.dataclass(frozen=True)
+class HKUGripperOutputs(transforms.DataTransformFn):
+    """Remove pi0.5's 32-D padding and return the trained 20-D action."""
+
+    def __call__(self, data: dict) -> dict:
+        return {"actions": np.asarray(data["actions"])[..., :20]}

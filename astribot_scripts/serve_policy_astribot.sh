@@ -6,23 +6,26 @@ set -euo pipefail
 cd "$(dirname "$0")/.."  # -> openpi/
 
 END_EFFECTOR="${END_EFFECTOR:-apexhand}"
-DEFAULT_CKPT="${DEFAULT_CKPT:-/data_disk/checkpoints/astribot/policy}"
-CKPT_DIR="${1:-${DEFAULT_CKPT}}"
 PORT="${2:-8000}"
 if [[ "${END_EFFECTOR}" == "gripper" ]]; then
-  DEFAULT_CONFIG=pi05_astribot_full_finetune
+  DEFAULT_CKPT="${DEFAULT_CKPT:-/data_disk/hku-transfer/downloads/pi05_astribot_30k}"
+  DEFAULT_CONFIG=pi05_astribot_hku_gripper
   DEFAULT_PROMPT_VALUE="${GRIPPER_PROMPT:-Execute the trained task}"
-  DEFAULT_ASSET_ID=astribot
+  DEFAULT_ASSET_ID=astribot_full_v21_rgb_h264_pi05
 else
+  DEFAULT_CKPT="${DEFAULT_CKPT:-/data_disk/checkpoints/astribot/policy}"
   DEFAULT_CONFIG=pi05_astribot_light_candle
   DEFAULT_PROMPT_VALUE="${APEXHAND_PROMPT:-Light the candle}"
   DEFAULT_ASSET_ID=astribot/astribot_light_candle_lerobot
 fi
+CKPT_DIR="${1:-${DEFAULT_CKPT}}"
 POLICY_CONFIG="${3:-${POLICY_CONFIG:-${DEFAULT_CONFIG}}}"
 DEFAULT_PROMPT="${4:-${DEFAULT_PROMPT_VALUE}}"
 TRANSPORT="${TRANSPORT:-websocket}"
 MAX_INFERENCE_HZ="${MAX_INFERENCE_HZ:-10.0}"
-ACTION_HORIZON="${ACTION_HORIZON:-64}"
+DEFAULT_ACTION_HORIZON=64
+[[ "${END_EFFECTOR}" == "gripper" ]] && DEFAULT_ACTION_HORIZON=50
+ACTION_HORIZON="${ACTION_HORIZON:-${DEFAULT_ACTION_HORIZON}}"
 ENSEMBLE_DECAY="${ENSEMBLE_DECAY:-0.01}"
 ASSET_ID="${ASSET_ID:-${DEFAULT_ASSET_ID}}"
 NORM_STATS="${CKPT_DIR}/assets/${ASSET_ID}/norm_stats.json"

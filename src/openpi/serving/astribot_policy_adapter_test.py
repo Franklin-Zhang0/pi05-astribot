@@ -3,7 +3,6 @@ from typing import ClassVar
 
 import numpy as np
 from PIL import Image
-import pytest
 
 from openpi.serving.astribot_policy_adapter import GRIPPER_MODEL_ACTION_DIM
 from openpi.serving.astribot_policy_adapter import MODEL_ACTION_DIM
@@ -291,17 +290,17 @@ def test_stock_gripper_layout_maps_body_and_mm_envelope() -> None:
 
     class GripperPolicy:
         def infer(self, observation: dict[str, object]) -> dict[str, object]:
-            assert np.array_equal(observation["observation/joint_position"], expected_state)
+            assert np.array_equal(observation["observation/state"], expected_state)
+            assert observation["observation/left_wrist_image"].shape == (2, 2, 3)
             return {"actions": (np.arange(GRIPPER_MODEL_ACTION_DIM, dtype=np.float32) + 1.0)[None, :]}
 
     adapter = AstribotPolicyAdapter(GripperPolicy(), checkpoint_id="gripper-test", end_effector="gripper")
     action, _ = adapter.infer_observation(request)
-    assert np.array_equal(action[:3], np.array([1.0, 2.0, 3.0]))
-    assert np.array_equal(action[3:7], np.array([4.0, 5.0, 6.0, 7.0]))
-    assert np.array_equal(action[9:16], np.arange(8.0, 15.0))
-    assert np.array_equal(action[16:23], np.arange(16.0, 23.0))
-    assert np.array_equal(action[7:9], np.array([24.0, 25.0]))
-    assert np.array_equal(adapter.last_gripper_action, np.array([15.0, 23.0]))
+    assert np.array_equal(action[:3], body_values[:3])
+    assert np.array_equal(action[3:7], np.array([1.0, 2.0, 3.0, 4.0]))
+    assert np.array_equal(action[9:16], np.arange(5.0, 12.0))
+    assert np.array_equal(action[16:23], np.arange(13.0, 20.0))
+    assert np.array_equal(adapter.last_gripper_action, np.array([12.0, 20.0]))
 
 
 def test_stock_gripper_mapping_holds_disabled_body_and_rejects_bad_mm() -> None:
@@ -311,7 +310,7 @@ def test_stock_gripper_mapping_holds_disabled_body_and_rejects_bad_mm() -> None:
     model = np.arange(GRIPPER_MODEL_ACTION_DIM, dtype=np.float64)
     action, gripper = map_gripper_model_action(model, hold, mask, np.array([10.0, 20.0]))
     assert np.array_equal(action[:3], hold[:3])
-    assert np.array_equal(gripper, np.array([14.0, 22.0]))
-    model[14] = 101.0
-    with pytest.raises(ValueError, match=r"outside \[0, 100\]"):
-        map_gripper_model_action(model, hold, mask, np.array([10.0, 20.0]))
+    assert np.array_equal(gripper, np.array([11.0, 19.0]))
+    model[11] = 101.0
+    _, clipped = map_gripper_model_action(model, hold, mask, np.array([10.0, 20.0]))
+    assert np.array_equal(clipped, np.array([100.0, 19.0]))

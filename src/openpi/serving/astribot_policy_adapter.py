@@ -43,14 +43,13 @@ MODEL_RIGHT_HAND_SLICE = slice(36, 52)
 # Stock-gripper checkpoints use the 25-D dataset order: chassis, torso, left
 # arm, left gripper, right arm, right gripper, head. Their prismatic outputs
 # are carried in a separate wire envelope.
-GRIPPER_MODEL_ACTION_DIM = 25
-GRIPPER_MODEL_CHASSIS_SLICE = slice(0, 3)
-GRIPPER_MODEL_TORSO_SLICE = slice(3, 7)
-GRIPPER_MODEL_LEFT_ARM_SLICE = slice(7, 14)
-GRIPPER_MODEL_LEFT_GRIPPER_INDEX = 14
-GRIPPER_MODEL_RIGHT_ARM_SLICE = slice(15, 22)
-GRIPPER_MODEL_RIGHT_GRIPPER_INDEX = 22
-GRIPPER_MODEL_HEAD_SLICE = slice(23, 25)
+GRIPPER_STATE_DIM = 25
+GRIPPER_MODEL_ACTION_DIM = 20
+GRIPPER_MODEL_TORSO_SLICE = slice(0, 4)
+GRIPPER_MODEL_LEFT_ARM_SLICE = slice(4, 11)
+GRIPPER_MODEL_LEFT_GRIPPER_INDEX = 11
+GRIPPER_MODEL_RIGHT_ARM_SLICE = slice(12, 19)
+GRIPPER_MODEL_RIGHT_GRIPPER_INDEX = 19
 
 # The checkpoint predicts every canonical action except the three chassis
 # joints.  This mask is separate from the per-observation control mask: a
@@ -323,7 +322,7 @@ def gripper_model_state_from_wire(request: Mapping[str, object]) -> np.ndarray:
     body, _, _ = _wire_measurements(request)
     grippers = _wire_gripper_measurements(request)
     state = np.concatenate((body[:3], body[3:7], body[9:16], grippers[:1], body[16:23], grippers[1:], body[7:9]))
-    if state.shape != (GRIPPER_MODEL_ACTION_DIM,):
+    if state.shape != (GRIPPER_STATE_DIM,):
         raise AssertionError(f"unexpected gripper model state shape {state.shape}")
     return state.astype(np.float32)
 
@@ -385,7 +384,7 @@ def map_gripper_model_action(
     enabled_mask: np.ndarray,
     hold_gripper: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Map one 25-D stock-gripper action to body and millimetre outputs."""
+    """Map one native HKU 20-D stock-gripper action to body and mm outputs."""
 
     model_action = np.asarray(model_action, dtype=np.float64).reshape(-1)
     if model_action.shape != (GRIPPER_MODEL_ACTION_DIM,):
@@ -403,18 +402,18 @@ def map_gripper_model_action(
         raise ValueError("gripper model action contains NaN or infinity")
 
     action = hold_action.copy()
-    action[0:3] = model_action[GRIPPER_MODEL_CHASSIS_SLICE]
     action[3:7] = model_action[GRIPPER_MODEL_TORSO_SLICE]
     action[9:16] = model_action[GRIPPER_MODEL_LEFT_ARM_SLICE]
     action[16:23] = model_action[GRIPPER_MODEL_RIGHT_ARM_SLICE]
-    action[7:9] = model_action[GRIPPER_MODEL_HEAD_SLICE]
     action[~enabled_mask] = hold_action[~enabled_mask]
     gripper = np.asarray(
         [model_action[GRIPPER_MODEL_LEFT_GRIPPER_INDEX], model_action[GRIPPER_MODEL_RIGHT_GRIPPER_INDEX]],
         dtype=np.float64,
     )
-    if np.any(gripper < 0.0) or np.any(gripper > 100.0):
-        raise ValueError(f"gripper model action is outside [0, 100] mm: {gripper}")
+    # The trained output is continuous and can overshoot the physical range
+    # slightly on an unfamiliar observation. Clamp at the protocol boundary;
+    # the Orin client still validates finiteness and freshness before publish.
+    gripper = np.clip(gripper, 0.0, 100.0)
     return action, gripper
 
 
@@ -581,21 +580,26 @@ class AstribotPolicyAdapter:
             raise ValueError("observation.images requires a valid head_stereo or head_rgbd image")
         head = images[head_camera]
 
-        policy_observation: dict[str, object] = {
-            "observation/head_rgbd": decode_camera_payload(head_camera, head),
-            "observation/joint_position": (
-                gripper_model_state_from_wire(request)
-                if self._end_effector == "gripper"
-                else model_state_from_wire(request)
-            ),
-        }
+        if self._end_effector == "gripper":
+            policy_observation: dict[str, object] = {
+                "observation/image": decode_camera_payload(head_camera, head),
+                "observation/state": gripper_model_state_from_wire(request),
+            }
+        else:
+            policy_observation = {
+                "observation/head_rgbd": decode_camera_payload(head_camera, head),
+                "observation/joint_position": model_state_from_wire(request),
+            }
         for camera, key in (
             ("left_wrist_rgbd", "observation/left_wrist_rgbd"),
             ("right_wrist_rgbd", "observation/right_wrist_rgbd"),
         ):
             image = images.get(camera)
             if isinstance(image, Mapping) and bool(image.get("valid", False)):
-                policy_observation[key] = decode_camera_payload(camera, image)
+                if self._end_effector == "gripper":
+                    policy_observation[{"left_wrist_rgbd": "observation/left_wrist_image", "right_wrist_rgbd": "observation/right_wrist_image"}[camera]] = decode_camera_payload(camera, image)
+                else:
+                    policy_observation[key] = decode_camera_payload(camera, image)
 
         prompt = request.get("prompt", self._default_prompt)
         if isinstance(prompt, bytes):

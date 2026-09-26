@@ -227,6 +227,23 @@ class SimpleDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class HKUGripperDataConfig(DataConfigFactory):
+    """Native HKU Astribot contract: mean/std stats, not quantile stats."""
+
+    data_transforms: tyro.conf.Suppress[GroupFactory] = dataclasses.field(default_factory=GroupFactory)
+    model_transforms: tyro.conf.Suppress[GroupFactory] = dataclasses.field(default_factory=ModelTransformFactory)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            data_transforms=self.data_transforms(model_config),
+            model_transforms=self.model_transforms(model_config),
+            use_quantile_norm=False,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class LeRobotAlohaDataConfig(DataConfigFactory):
     # If true, will convert joint dimensions to deltas with respect to the current state before passing to the model.
     # Gripper dimensions will remain in absolute values.
@@ -619,6 +636,33 @@ _CONFIGS = [
         save_interval=10_000,
         log_interval=100,
         num_workers=4
+    ),
+
+    TrainConfig(
+        name="pi05_astribot_hku_gripper",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=50,
+            discrete_state_input=False,
+        ),
+        data=HKUGripperDataConfig(
+            repo_id="astribot_full_v21_rgb_h264",
+            assets=AssetsConfig(
+                assets_dir="/data_disk/hku-transfer/downloads/pi05_astribot_30k/assets",
+                asset_id="astribot_full_v21_rgb_h264_pi05",
+            ),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[astribot_policy.HKUGripperInputs()],
+                outputs=[astribot_policy.HKUGripperOutputs()],
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/data_disk/hku-transfer/downloads/pi05_astribot_30k/params"
+        ),
+        batch_size=128,
+        num_train_steps=30_000,
+        fsdp_devices=8,
     ),
 
     TrainConfig(
