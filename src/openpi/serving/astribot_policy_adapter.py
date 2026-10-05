@@ -194,13 +194,14 @@ class ACTTemporalEnsembler:
         return result.astype(np.float32)
 
 
-def decode_camera_payload(camera: str, image: Mapping[str, object]) -> np.ndarray:
+def decode_camera_payload(
+    camera: str, image: Mapping[str, object], *, default_wrist_rotation: int = 180
+) -> np.ndarray:
     """Decode one Orin compressed image and apply training camera geometry.
 
     The stereo crop happens before the model's resize-with-padding transform.
-    Wrist camera streams are mounted upside down in the Orin deployment and
-    therefore receive the 180-degree rotation recorded by the dataset
-    converter.
+    Explicit per-image rotation overrides the checkpoint's wrist default.
+    HKU stock-gripper images retain source orientation; dexhand images use 180.
 
     The policy client can provide either the normal head RGB-D color stream or
     the side-by-side head stereo stream. Only the latter is cropped.
@@ -222,7 +223,11 @@ def decode_camera_payload(camera: str, image: Mapping[str, object]) -> np.ndarra
     elif camera == "head_rgbd":
         pass
     elif camera in {"left_wrist_rgbd", "right_wrist_rgbd"}:
-        decoded = decoded.transpose(Image.Transpose.ROTATE_180)
+        rotation = image.get("rotation_degrees", default_wrist_rotation)
+        if type(rotation) is not int or rotation not in (0, 180):
+            raise ValueError(f"{camera}: rotation_degrees must be integer 0 or 180")
+        if rotation == 180:
+            decoded = decoded.transpose(Image.Transpose.ROTATE_180)
     else:
         raise ValueError(f"unsupported Astribot camera {camera!r}")
     return np.asarray(decoded, dtype=np.uint8).copy()
@@ -597,7 +602,7 @@ class AstribotPolicyAdapter:
             image = images.get(camera)
             if isinstance(image, Mapping) and bool(image.get("valid", False)):
                 if self._end_effector == "gripper":
-                    policy_observation[{"left_wrist_rgbd": "observation/left_wrist_image", "right_wrist_rgbd": "observation/right_wrist_image"}[camera]] = decode_camera_payload(camera, image)
+                    policy_observation[{"left_wrist_rgbd": "observation/left_wrist_image", "right_wrist_rgbd": "observation/right_wrist_image"}[camera]] = decode_camera_payload(camera, image, default_wrist_rotation=0)
                 else:
                     policy_observation[key] = decode_camera_payload(camera, image)
 

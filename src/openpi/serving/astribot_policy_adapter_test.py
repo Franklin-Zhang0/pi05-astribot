@@ -2,6 +2,7 @@ import io
 from typing import ClassVar
 
 import numpy as np
+import pytest
 from PIL import Image
 
 from openpi.serving.astribot_policy_adapter import GRIPPER_MODEL_ACTION_DIM
@@ -292,6 +293,8 @@ def test_stock_gripper_layout_maps_body_and_mm_envelope() -> None:
         def infer(self, observation: dict[str, object]) -> dict[str, object]:
             assert np.array_equal(observation["observation/state"], expected_state)
             assert observation["observation/left_wrist_image"].shape == (2, 2, 3)
+            with Image.open(io.BytesIO(request["observation"]["images"]["left_wrist_rgbd"]["payload"])) as source:
+                assert np.array_equal(observation["observation/left_wrist_image"], np.asarray(source.convert("RGB")))
             return {"actions": (np.arange(GRIPPER_MODEL_ACTION_DIM, dtype=np.float32) + 1.0)[None, :]}
 
     adapter = AstribotPolicyAdapter(GripperPolicy(), checkpoint_id="gripper-test", end_effector="gripper")
@@ -301,6 +304,21 @@ def test_stock_gripper_layout_maps_body_and_mm_envelope() -> None:
     assert np.array_equal(action[9:16], np.arange(5.0, 12.0))
     assert np.array_equal(action[16:23], np.arange(13.0, 20.0))
     assert np.array_equal(adapter.last_gripper_action, np.array([12.0, 20.0]))
+
+
+def test_wrist_rotation_override_is_applied_once_and_independently() -> None:
+    pixels = np.arange(18, dtype=np.uint8).reshape(2, 3, 3)
+    image = {"valid": True, "payload": _encoded_png(pixels)}
+    assert np.array_equal(decode_camera_payload("left_wrist_rgbd", image, default_wrist_rotation=0), pixels)
+    assert np.array_equal(decode_camera_payload("left_wrist_rgbd", image | {"rotation_degrees": 0}), pixels)
+    assert np.array_equal(decode_camera_payload("right_wrist_rgbd", image | {"rotation_degrees": 180}, default_wrist_rotation=0), pixels[::-1, ::-1])
+
+
+@pytest.mark.parametrize("rotation", [True, 90, -180, 180.0, "180", None])
+def test_wrist_rotation_rejects_malformed_metadata(rotation) -> None:
+    image = {"valid": True, "payload": _encoded_png(np.zeros((2, 2, 3), dtype=np.uint8)), "rotation_degrees": rotation}
+    with pytest.raises(ValueError, match="rotation_degrees"):
+        decode_camera_payload("left_wrist_rgbd", image)
 
 
 def test_stock_gripper_mapping_holds_disabled_body_and_rejects_bad_mm() -> None:
