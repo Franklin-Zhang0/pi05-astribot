@@ -39,3 +39,27 @@ JAX_PLATFORM_NAME=cpu uv run examples/engram/smoke_cpu.py --assets-base-dir /tmp
 ```
 
 Sampled statistics are rejected for ordinary training unless `--data.allow-sampled-stats` is explicitly selected; the smoke script makes that diagnostic-only choice itself.
+
+## Mixed-end-effector snapshot, 2026-11-01
+
+The pinned [multi-source manifest](kitchen_new_20261101.json) combines the original 450 fully labeled gripper episodes with 110 `st026` and 260 `st031` full, successful episodes. `st026` uses grippers and `st031` shows dexterous hands; neither new export records any end-effector feedback or commands. The previous 113-episode incomplete source and partial fragments stay excluded. The validation split preserves the original 23 held-out episodes and adds 19 from the new sources, for 778 training and 42 validation episodes. Package IDs are held out across all sources, and duplicate annotations, ambiguous mappings, missing packages, unexpected schema changes and episode counts fail closed.
+
+All sources supervise the same 20 joint deltas. For the 370 episodes without end-effector annotations, a prompt marker explicitly says `End-effector state unavailable`, neutral normalized state tokens occupy the two unavailable gripper slots, and their flow inputs are pure noise and their output loss is masked. No finger labels are invented. The joint-only episodes cannot establish whether a static-joint chunk contains end-effector activity, so such ambiguous chunks are retained. Labeled gripper episodes keep the original joint-or-gripper motion pruning rule. Gripper normalization statistics use only labeled training anchors; joint statistics use all retained training anchors. The full stats pass includes the final partial batch and saves sample counts, the source snapshot, and a hash in the statistics manifest.
+
+For an effective global batch of 256 with two-way FSDP, `--gradient-accumulation-steps 32` performs 32 global microbatches of eight (four samples per device) per optimizer update. This reduces activation memory but has not by itself established that a full-size model fits or performs well on a specific H100 allocation. Set `--checkpoint-completed-steps` to label checkpoint directories by completed optimizer updates; the default keeps legacy OpenPI naming.
+
+```bash
+export ENGRAM_DATA_ROOT="$PWD/examples/engram/kitchen_new_20261101.json"
+export ENGRAM_ASSETS_DIR=/path/to/run/assets
+examples/engram/finetune_pi05.sh stats --batch-size 256 --num-workers 0
+examples/engram/finetune_pi05.sh train my-mixed-engram-run \
+  --batch-size 256 --num-train-steps 30000 --save-interval 10000 --keep-period 10000 \
+  --fsdp-devices 2 --gradient-accumulation-steps 32 --checkpoint-completed-steps \
+  --checkpoint-dir-override /path/to/exact/run/checkpoint/directory
+uv run examples/engram/evaluate_pi05.py --data-root "$ENGRAM_DATA_ROOT" \
+  --checkpoint-dir /path/to/exact/run/checkpoint/directory/30000
+```
+
+The held-out evaluator reports joint errors across all chosen samples and gripper errors only for samples with actual gripper labels. The mixed policy does not acquire direct finger-control supervision from the hand videos.
+
+`--data.single-camera` is an Engram-only opt-in that removes the two permanently masked wrist-image streams from π0.5's vision and transformer inputs. It does not change the physical state/action data or the statistics. This mode rejects samples that actually provide wrist images; omit the flag to keep the existing three-slot policy interface. The CPU smoke compares losses and gradients against the ordinary masked-wrist path.

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +11,7 @@ import pytest
 from openpi import transforms
 from openpi.models.model import ModelType
 from openpi.policies.astribot_policy import AstribotInputs
+from openpi.policies import engram_policy
 from openpi.policies.engram_policy import ExactJointNoiseCompensation
 from openpi.shared import normalize
 from openpi.training import engram_dataset as engram
@@ -276,3 +278,86 @@ def test_normalization_hash_survives_checkpoint_roundtrip(v3_fixture, tmp_path):
     identity["norm_stats_sha256"] = second
     (checkpoint / "engram_stats_manifest.json").write_text(json.dumps(identity))
     engram.check_stats_identity(checkpoint / "engram_stats_manifest.json", v3_fixture, "all", 64, 0.01, 0.0)
+
+
+def _mixed_manifest(v3_fixture, tmp_path):
+    full = tmp_path / "full/trainable"
+    partial = tmp_path / "partial/trainable"
+    shutil.copytree(v3_fixture, full)
+    shutil.copytree(v3_fixture, partial)
+    spec = {"format": "engram-multisource-v1", "sources": []}
+    for name, root, has_gripper in (("full", full, True), ("partial", partial, False)):
+        info_path = root / "meta/info.json"
+        info = json.loads(info_path.read_text())
+        if has_gripper:
+            for key in (engram.LEFT_STATE, engram.RIGHT_STATE, engram.LEFT_ACTION, engram.RIGHT_ACTION, engram.LEFT_MODE, engram.RIGHT_MODE):
+                info["features"][key] = {}
+        info_path.write_text(json.dumps(info))
+        metadata_path = root / "meta/episodes/chunk-000/file-000.parquet"
+        metadata = pq.read_table(metadata_path).to_pylist()
+        for row in metadata:
+            row["annotation_id"] = name + "-" + row["annotation_id"]
+        pq.write_table(pa.Table.from_pylist(metadata), metadata_path)
+        (root.parent / "export_plan.json").write_text(json.dumps([
+            {"annotation_id": f"{name}-annotation-0", "data_package_id": f"{name}-train"},
+            {"annotation_id": f"{name}-annotation-1", "data_package_id": f"{name}-val"},
+        ]))
+        if not has_gripper:
+            path = root / "data/chunk-000/file-000.parquet"
+            table = pq.read_table(path)
+            table = table.drop([engram.LEFT_STATE, engram.RIGHT_STATE, engram.LEFT_ACTION, engram.RIGHT_ACTION, engram.LEFT_MODE, engram.RIGHT_MODE])
+            pq.write_table(table, path)
+        spec["sources"].append({"root": str(root), "has_gripper": has_gripper, "expected_episodes": 2,
+                                "validation_packages": [f"{name}-val"]})
+    path = tmp_path / "sources.json"
+    path.write_text(json.dumps(spec))
+    return path
+
+
+def test_mixed_sources_preserve_masks_and_only_fit_labeled_grippers(v3_fixture, tmp_path):
+    manifest = _mixed_manifest(v3_fixture, tmp_path)
+    dataset = engram.EngramMultiDataset(manifest, 2, split="train", decode_images=False)
+    assert len(dataset.datasets) == 2
+    labeled, partial = dataset.datasets
+    assert labeled[0]["action_mask"].all()
+    assert partial[0]["action_mask"][:20].all() and not partial[0]["action_mask"][20:].any()
+    mixed, counts = engram.compute_training_stats(dataset, seed=4, batch_size=2)
+    full, full_counts = engram.compute_training_stats(labeled, seed=4, batch_size=2)
+    assert counts["used_anchors"] == len(dataset)
+    assert counts["labeled_gripper_anchors"] == full_counts["used_anchors"] == len(labeled)
+    for key in ("state", "actions"):
+        for field in ("mean", "std", "q01", "q99"):
+            np.testing.assert_allclose(getattr(mixed[key], field)[20:], getattr(full[key], field)[20:])
+    raw = partial[0]
+    adapted = engram_policy.EngramInputs(model_type=ModelType.PI05, model_action_dim=32)(raw)
+    assert "End-effector state unavailable." in adapted["prompt"]
+    adapted["state"][20:] = 999
+    adapted = engram_policy.MaskUnavailableState()(adapted)
+    np.testing.assert_array_equal(adapted["state"][20:], [0, 0])
+    assert not adapted["action_mask"][20:22].any()
+
+
+def test_multisource_rejects_duplicate_annotations(v3_fixture, tmp_path):
+    manifest = _mixed_manifest(v3_fixture, tmp_path)
+    spec = json.loads(manifest.read_text())
+    full, partial = [Path(item["root"]) for item in spec["sources"]]
+    metadata_path = partial / "meta/episodes/chunk-000/file-000.parquet"
+    rows = pq.read_table(metadata_path).to_pylist()
+    rows[0]["annotation_id"] = "full-annotation-0"
+    pq.write_table(pa.Table.from_pylist(rows), metadata_path)
+    plan_path = partial.parent / "export_plan.json"
+    plan = json.loads(plan_path.read_text())
+    plan[0]["annotation_id"] = "full-annotation-0"
+    plan_path.write_text(json.dumps(plan))
+    with pytest.raises(ValueError, match="Duplicate annotation"):
+        engram.EngramMultiDataset(manifest, 2, split="train", decode_images=False)
+
+
+def test_opt_in_single_camera_does_not_discard_supplied_wrist(v3_fixture):
+    sample = engram.EngramDataset(v3_fixture, 2, decode_images=False)[0]
+    transform = engram_policy.EngramInputs(model_type=ModelType.PI05, model_action_dim=32, single_camera=True)
+    out = transform(sample)
+    assert tuple(out["image"]) == ("base_0_rgb",)
+    assert tuple(out["image_mask"]) == ("base_0_rgb",)
+    with pytest.raises(ValueError, match="cannot discard"):
+        transform({**sample, "observation/left_wrist_rgbd": np.zeros((1, 1, 3), np.uint8)})

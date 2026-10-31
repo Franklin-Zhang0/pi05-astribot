@@ -248,12 +248,18 @@ class EngramDataConfig(DataConfigFactory):
     prune_threshold_rad: float = 0.01
     gripper_threshold_percent: float = 0.0
     allow_sampled_stats: bool = False
+    # All Engram wrist cameras are absent. Opt in to removing their masked
+    # tokens from the actual vision/language computation.
+    single_camera: bool = False
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         joint_mask = _transforms.make_bool_mask(20, -2)
         data_transforms = _transforms.Group(
-            inputs=[astribot_policy.AstribotInputs(model_type=model_config.model_type)],
+            inputs=[engram_policy.EngramInputs(
+                model_type=model_config.model_type, model_action_dim=model_config.action_dim,
+                single_camera=self.single_camera,
+            )],
             outputs=[astribot_policy.AstribotOutputs(action_dim=22)],
         ).push(
             inputs=[_transforms.DeltaActions(joint_mask)],
@@ -266,6 +272,10 @@ class EngramDataConfig(DataConfigFactory):
         asset_split = "all" if self.split == "all" else "train"
         factory = dataclasses.replace(self, repo_id=f"{self.repo_id}_{asset_split}")
         base = factory.create_base_config(assets_dirs, model_config)
+        model_transforms = ModelTransformFactory()(model_config)
+        model_transforms = dataclasses.replace(
+            model_transforms, inputs=[engram_policy.MaskUnavailableState(), *model_transforms.inputs]
+        )
         return dataclasses.replace(
             base,
             engram_data_dir=self.data_root,
@@ -275,7 +285,7 @@ class EngramDataConfig(DataConfigFactory):
             engram_allow_sampled_stats=self.allow_sampled_stats,
             engram_stats_manifest=str(pathlib.Path(self.assets.assets_dir or assets_dirs) / base.asset_id / "engram_stats_manifest.json"),
             data_transforms=data_transforms,
-            model_transforms=ModelTransformFactory()(model_config),
+            model_transforms=model_transforms,
         )
 
 
@@ -553,11 +563,15 @@ class TrainConfig:
     assets_base_dir: str = "./assets"
     # Base directory for checkpoints.
     checkpoint_base_dir: str = "./checkpoints"
+    # Optional exact run directory, without config/experiment path components.
+    checkpoint_dir_override: str | None = None
 
     # Random seed that will be used by random generators during training.
     seed: int = 42
     # Global batch size.
     batch_size: int = 32
+    # Average this many equal microbatch gradients for each optimizer update.
+    gradient_accumulation_steps: int = 1
     # Number of workers to use for the data loader. Increasing this number will speed up data loading but
     # will increase memory and CPU usage.
     num_workers: int = 2
@@ -568,6 +582,9 @@ class TrainConfig:
     log_interval: int = 100
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
+    # Opt in to naming checkpoints by completed optimizer updates (legacy
+    # OpenPI recipes historically name them by the zero-based loop index).
+    checkpoint_completed_steps: bool = False
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
     keep_period: int | None = 5000
 
@@ -596,6 +613,8 @@ class TrainConfig:
     @property
     def checkpoint_dir(self) -> pathlib.Path:
         """Get the checkpoint directory for this config."""
+        if self.checkpoint_dir_override is not None:
+            return pathlib.Path(self.checkpoint_dir_override).expanduser().resolve()
         if not self.exp_name:
             raise ValueError("--exp_name must be set")
         return (pathlib.Path(self.checkpoint_base_dir) / self.name / self.exp_name).resolve()

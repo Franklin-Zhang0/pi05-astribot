@@ -2,6 +2,7 @@ from collections.abc import Iterator, Sequence
 import logging
 import multiprocessing
 import os
+import pathlib
 import typing
 from typing import Literal, Protocol, SupportsIndex, TypeVar
 
@@ -141,7 +142,12 @@ def create_torch_dataset(
         # Lazy import keeps the existing LeRobot v2 and fake-data paths untouched.
         from openpi.training import engram_dataset
 
-        return engram_dataset.EngramDataset(
+        dataset_cls = (
+            engram_dataset.EngramMultiDataset
+            if pathlib.Path(data_config.engram_data_dir).is_file()
+            else engram_dataset.EngramDataset
+        )
+        return dataset_cls(
             data_config.engram_data_dir,
             action_horizon,
             split=data_config.engram_split,

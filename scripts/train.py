@@ -133,6 +133,38 @@ def init_train_state(
     return train_state, state_sharding
 
 
+def _checkpoint_save_step(step, start_step, num_steps, interval, completed_steps):
+    """Return the checkpoint label, preserving the historical default."""
+    if completed_steps:
+        completed = step + 1
+        return completed if completed % interval == 0 or completed == num_steps else None
+    return step if (step % interval == 0 and step > start_step) or step == num_steps - 1 else None
+
+
+def _accumulate_microbatch_grads(loss_and_grad_fn, batch, rng, accumulation_steps):
+    """Average equal-microbatch gradients, applying the optimizer only afterwards."""
+    batch_size = batch[1].shape[0]
+    if accumulation_steps < 1 or batch_size % accumulation_steps:
+        raise ValueError("Global batch size must be divisible by gradient accumulation steps")
+    microbatch_size = batch_size // accumulation_steps
+
+    def evaluate(index):
+        microbatch = jax.tree.map(
+            lambda value: jax.lax.dynamic_slice_in_dim(value, index * microbatch_size, microbatch_size), batch
+        )
+        return loss_and_grad_fn(jax.random.fold_in(rng, index), *microbatch)
+
+    loss, grads = evaluate(0)
+
+    def add(index, carry):
+        total_loss, total_grads = carry
+        micro_loss, micro_grads = evaluate(index)
+        return total_loss + micro_loss, jax.tree.map(lambda a, b: a + b, total_grads, micro_grads)
+
+    loss, grads = jax.lax.fori_loop(1, accumulation_steps, add, (loss, grads))
+    return loss / accumulation_steps, jax.tree.map(lambda value: value / accumulation_steps, grads)
+
+
 @at.typecheck
 def train_step(
     config: _config.TrainConfig,
@@ -155,7 +187,16 @@ def train_step(
 
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
-    loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(model, train_rng, observation, actions)
+    if config.gradient_accumulation_steps == 1:
+        loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(model, train_rng, observation, actions)
+    else:
+        grad_fn = nnx.value_and_grad(loss_fn, argnums=diff_state)
+        loss, grads = _accumulate_microbatch_grads(
+            lambda key, obs, act: grad_fn(model, key, obs, act),
+            (observation, actions),
+            train_rng,
+            config.gradient_accumulation_steps,
+        )
 
     params = state.params.filter(config.trainable_filter)
     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
@@ -199,6 +240,10 @@ def main(config: _config.TrainConfig):
         raise ValueError(
             f"Batch size {config.batch_size} must be divisible by the number of devices {jax.device_count()}."
         )
+    if config.gradient_accumulation_steps < 1 or config.batch_size % (
+        config.gradient_accumulation_steps * jax.device_count()
+    ) != 0:
+        raise ValueError("Each global microbatch must divide evenly over all devices")
 
     jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
 
@@ -269,8 +314,11 @@ def main(config: _config.TrainConfig):
             infos = []
         batch = next(data_iter)
 
-        if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
-            _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
+        save_step = _checkpoint_save_step(
+            step, start_step, config.num_train_steps, config.save_interval, config.checkpoint_completed_steps
+        )
+        if save_step is not None:
+            _checkpoints.save_state(checkpoint_manager, train_state, data_loader, save_step)
 
     logging.info("Waiting for checkpoint manager to finish")
     checkpoint_manager.wait_until_finished()

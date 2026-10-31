@@ -22,6 +22,7 @@ def evaluate_samples(dataset: Any, policy: Any, max_samples: int, seed: int) -> 
     squared_joints = 0.0
     squared_grippers = np.zeros(2, dtype=np.float64)
     action_steps = 0
+    gripper_action_steps = 0
     for index in indices:
         sample = dataset[int(index)]
         target = sample["actions"]
@@ -31,14 +32,18 @@ def evaluate_samples(dataset: Any, policy: Any, max_samples: int, seed: int) -> 
             raise ValueError(f"Invalid policy output: {predicted.shape}, expected {target.shape}")
         error = predicted.astype(np.float64) - target
         squared_joints += float(np.sum(np.square(error[:, :20])))
-        squared_grippers += np.sum(np.square(error[:, 20:]), axis=0)
+        mask = np.asarray(sample.get("action_mask", np.ones(22, dtype=bool)), dtype=bool)
+        if mask[20:22].all():
+            squared_grippers += np.sum(np.square(error[:, 20:]), axis=0)
+            gripper_action_steps += len(error)
         action_steps += len(error)
     return {
         "num_anchors": count,
         "action_steps": action_steps,
+        "gripper_action_steps": gripper_action_steps,
         "joint_rmse_rad": float(np.sqrt(squared_joints / (action_steps * 20))),
-        "left_gripper_rmse_percent": float(np.sqrt(squared_grippers[0] / action_steps)),
-        "right_gripper_rmse_percent": float(np.sqrt(squared_grippers[1] / action_steps)),
+        "left_gripper_rmse_percent": float(np.sqrt(squared_grippers[0] / gripper_action_steps)) if gripper_action_steps else None,
+        "right_gripper_rmse_percent": float(np.sqrt(squared_grippers[1] / gripper_action_steps)) if gripper_action_steps else None,
         "selection_seed": seed,
     }
 
@@ -68,7 +73,8 @@ def main(
     engram_dataset.check_stats_identity(
         manifest, data_root, "val", config.model.action_horizon, prune_threshold_rad, gripper_threshold_percent
     )
-    dataset = engram_dataset.EngramDataset(
+    dataset_cls = engram_dataset.EngramMultiDataset if Path(data_root).is_file() else engram_dataset.EngramDataset
+    dataset = dataset_cls(
         data_root,
         config.model.action_horizon,
         split="val",
@@ -82,7 +88,7 @@ def main(
             {
                 "checkpoint": str(checkpoint),
                 "split": "validation",
-                "episodes": len(dataset.episodes),
+                "episodes": sum(len(part.episodes) for part in dataset.datasets) if hasattr(dataset, "datasets") else len(dataset.episodes),
                 "eligible_anchors": len(dataset),
                 "metric": "offline physical action RMSE; not rollout success",
             }

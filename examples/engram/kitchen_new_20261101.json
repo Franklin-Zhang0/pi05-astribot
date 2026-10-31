@@ -1,0 +1,30 @@
+{
+  "format": "engram-multisource-v1",
+  "description": "Kitchen exports selected 2026-11-01; package-disjoint validation",
+  "sources": [
+    {
+      "root": "/hand_keypoint_data/engram_data/kitchen_new/req0148_st028_1793266078098_lerobot/trainable",
+      "expected_episodes": 450,
+      "has_gripper": true,
+      "validation_packages": [
+        "5af748f3-6e02-4506-9938-90bb165c0953",
+        "07bc4327-6a40-42f0-8a30-35168b9d73b2"
+      ]
+    },
+    {
+      "root": "/hand_keypoint_data/engram_data/kitchen_new/req0148_st026_1793421271657_lerobot/trainable",
+      "expected_episodes": 110,
+      "has_gripper": false,
+      "validation_packages": ["5b27ada9-db65-4697-84ae-fc314a837b73"]
+    },
+    {
+      "root": "/hand_keypoint_data/engram_data/kitchen_new/req0148_st031_1793359303526_lerobot/trainable",
+      "expected_episodes": 260,
+      "has_gripper": false,
+      "validation_packages": [
+        "9395b5fa-020e-4ec9-98be-2b1bf8ecea2e",
+        "8d0caf28-4308-4a0e-8cc2-03563cf70a13"
+      ]
+    }
+  ]
+}

@@ -16,6 +16,14 @@ from openpi.shared import array_typing as at
 logger = logging.getLogger("openpi")
 
 
+def _preprocess_observation(rng, observation, *, train=False):
+    # The explicit base-only Engram input omits wrist images that are always
+    # masked. Keep the standard strict camera contract for every other layout.
+    if observation.action_mask is not None and set(observation.images) == {"base_0_rgb"}:
+        return _model.preprocess_observation(rng, observation, train=train, image_keys=("base_0_rgb",))
+    return _model.preprocess_observation(rng, observation, train=train)
+
+
 def make_attn_mask(input_mask, mask_ar):
     """Adapted from big_vision.
 
@@ -190,7 +198,7 @@ class Pi0(_model.BaseModel):
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
     ) -> at.Float[at.Array, "*b ah"]:
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
-        observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
+        observation = _preprocess_observation(preprocess_rng, observation, train=train)
 
         batch_shape = actions.shape[:-2]
         noise = jax.random.normal(noise_rng, actions.shape)
@@ -198,6 +206,13 @@ class Pi0(_model.BaseModel):
         time_expanded = time[..., None, None]
         x_t = time_expanded * noise + (1 - time_expanded) * actions
         u_t = noise - actions
+
+        # Missing labels must neither be trained toward a fabricated target
+        # nor leak a fabricated clean action into the expert input. Keep their
+        # input as independent noise and exclude their output from the loss.
+        action_mask = observation.action_mask
+        if action_mask is not None:
+            x_t = jnp.where(action_mask[..., None, :], x_t, noise)
 
         # one big forward pass of prefix + suffix at once
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
@@ -211,7 +226,11 @@ class Pi0(_model.BaseModel):
         )
         v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
-        return jnp.mean(jnp.square(v_t - u_t), axis=-1)
+        per_dim_loss = jnp.square(v_t - u_t)
+        if action_mask is None:
+            return jnp.mean(per_dim_loss, axis=-1)
+        weights = action_mask[..., None, :].astype(per_dim_loss.dtype)
+        return jnp.sum(per_dim_loss * weights, axis=-1) / jnp.maximum(jnp.sum(weights, axis=-1), 1)
 
     @override
     def sample_actions(
@@ -222,7 +241,7 @@ class Pi0(_model.BaseModel):
         num_steps: int | at.Int[at.Array, ""] = 10,
         noise: at.Float[at.Array, "b ah ad"] | None = None,
     ) -> _model.Actions:
-        observation = _model.preprocess_observation(None, observation, train=False)
+        observation = _preprocess_observation(None, observation, train=False)
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
         dt = -1.0 / num_steps

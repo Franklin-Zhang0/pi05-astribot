@@ -60,7 +60,7 @@ VAL_PACKAGE_IDS = frozenset(
         "07bc4327-6a40-42f0-8a30-35168b9d73b2",
     }
 )
-STATS_CONTRACT = "engram_w1_physical_delta20_gripper_abs_quantilefloor_pruned_exactnoise_v4"
+STATS_CONTRACT = "engram_w1_delta20_mixed_end_effector_mask_stats_v5"
 _COLUMNS = (
     "timestamp",
     "frame_index",
@@ -75,6 +75,59 @@ _COLUMNS = (
     LEFT_MODE,
     RIGHT_MODE,
 )
+
+
+def _read_source_manifest(path: str | Path) -> dict[str, Any]:
+    """Validate a pinned collection of exports and their global package split."""
+    spec = json.loads(Path(path).read_text())
+    if spec.get("format") != "engram-multisource-v1" or not spec.get("sources"):
+        raise ValueError("Expected an engram-multisource-v1 manifest with sources")
+    roots: set[str] = set()
+    annotations: set[str] = set()
+    heldout: set[str] = set()
+    inventories = []
+    for source in spec["sources"]:
+        root = Path(source["root"])
+        canonical = str(root.resolve())
+        if canonical in roots or not isinstance(source.get("has_gripper"), bool):
+            raise ValueError("Duplicate source root or unspecified end-effector label availability")
+        roots.add(canonical)
+        info = json.loads((root / "meta/info.json").read_text())
+        grip_keys = {LEFT_STATE, RIGHT_STATE, LEFT_ACTION, RIGHT_ACTION, LEFT_MODE, RIGHT_MODE}
+        present = grip_keys.intersection(info["features"])
+        if present != (grip_keys if source["has_gripper"] else set()):
+            raise ValueError(f"Incomplete or unexpected end-effector schema in {root}")
+        paths = sorted((root / "meta/episodes").glob("chunk-*/*.parquet"))
+        rows = [row for p in paths for row in pq.read_table(p).to_pylist()]
+        selected = [r for r in rows if r.get("completeness") == "FULL" and r.get("annotation_result") == "SUCCESS"]
+        if len(selected) != source.get("expected_episodes"):
+            raise ValueError(f"Unexpected selected episode count in {root}")
+        mapping = {}
+        for entry in json.loads((root.parent / "export_plan.json").read_text()):
+            annotation, package = entry["annotation_id"], entry["data_package_id"]
+            if annotation in mapping and mapping[annotation] != package:
+                raise ValueError(f"Ambiguous package mapping for {annotation}")
+            mapping[annotation] = package
+        source_packages = set()
+        for row in selected:
+            annotation = row["annotation_id"]
+            if annotation in annotations:
+                raise ValueError(f"Duplicate annotation across selected exports: {annotation}")
+            annotations.add(annotation)
+            if annotation not in mapping:
+                raise ValueError(f"Missing source package for {annotation}")
+            source_packages.add(mapping[annotation])
+        local_heldout = set(source.get("validation_packages", ()))
+        if not local_heldout.issubset(source_packages):
+            raise ValueError(f"Unknown validation package in {root}")
+        heldout.update(local_heldout)
+        inventories.append(source_packages)
+    # A package appearing in several exports is held out from all of them.
+    for source, packages in zip(spec["sources"], inventories, strict=True):
+        source["validation_packages"] = sorted(packages & heldout)
+        if not source["validation_packages"]:
+            raise ValueError(f"No validation package selected in {source['root']}")
+    return spec
 
 
 def floor_quantile_ranges(stats: dict[str, normalize.NormStats]) -> dict[str, normalize.NormStats]:
@@ -102,6 +155,21 @@ def stats_identity(
     root: str | Path, split: str, action_horizon: int, prune_threshold_rad: float, gripper_threshold_percent: float
 ) -> dict[str, Any]:
     root = Path(root)
+    if root.is_file():
+        spec = _read_source_manifest(root)
+        return {
+            "contract": STATS_CONTRACT,
+            "split": "train" if split == "val" else split,
+            "action_horizon": action_horizon,
+            "prune_threshold_rad": prune_threshold_rad,
+            "gripper_threshold_percent": gripper_threshold_percent,
+            "source_manifest_sha256": hashlib.sha256(root.read_bytes()).hexdigest(),
+            "source_spec": spec,
+            "sources": [
+                stats_identity(item["root"], split, action_horizon, prune_threshold_rad, gripper_threshold_percent)
+                for item in spec["sources"]
+            ],
+        }
     identity = {
         "contract": STATS_CONTRACT,
         "split": "train" if split == "val" else split,
@@ -243,8 +311,11 @@ class EngramDataset:
         max_gap_s: float = 0.25,
         video_tolerance_s: float = 0.0001,
         video_cache_size: int = 4,
+        has_gripper: bool = True,
+        validation_packages: frozenset[str] | None = None,
     ) -> None:
         self.root = Path(root)
+        self.has_gripper = has_gripper
         self.action_horizon = action_horizon
         self.decode_images = decode_images
         self.video_tolerance_s = video_tolerance_s
@@ -299,9 +370,10 @@ class EngramDataset:
                 return annotation_packages[annotation]
 
             observed_packages = {package_for(row) for row in selected}
-            if missing := VAL_PACKAGE_IDS - observed_packages:
+            heldout = VAL_PACKAGE_IDS if validation_packages is None else validation_packages
+            if missing := heldout - observed_packages:
                 raise ValueError(f"Expected validation packages absent from export plan: {sorted(missing)}")
-            selected = [row for row in selected if (package_for(row) in VAL_PACKAGE_IDS) == (split == "val")]
+            selected = [row for row in selected if (package_for(row) in heldout) == (split == "val")]
         selected.sort(key=lambda row: int(row["episode_index"]))
         ids = [int(row["episode_index"]) for row in selected]
         if not ids or len(ids) != len(set(ids)):
@@ -315,7 +387,8 @@ class EngramDataset:
             data_path = self.root / info["data_path"].format(
                 chunk_index=int(row["data/chunk_index"]), file_index=int(row["data/file_index"])
             )
-            table = pq.read_table(data_path, columns=list(_COLUMNS), filters=[("episode_index", "=", episode_id)])
+            columns = _COLUMNS if has_gripper else _COLUMNS[:6]
+            table = pq.read_table(data_path, columns=list(columns), filters=[("episode_index", "=", episode_id)])
             n = len(table)
             if n != int(row["length"]) or n == 0:
                 raise ValueError(f"Episode {episode_id}: metadata length {row['length']} != {n} rows")
@@ -326,14 +399,18 @@ class EngramDataset:
             gaps = np.diff(timestamps)
             if not np.isfinite(timestamps).all() or np.any(gaps <= 0) or np.any(gaps > max_gap_s):
                 raise ValueError(f"Episode {episode_id}: non-monotonic or missing timestamps (max gap {max_gap_s}s)")
-            states = np.concatenate(
-                [_vector(table, STATE_KEY, 20), _vector(table, LEFT_STATE, 1), _vector(table, RIGHT_STATE, 1)], axis=1
-            )
-            actions = np.concatenate(
-                [_vector(table, ACTION_KEY, 20), _vector(table, LEFT_ACTION, 1), _vector(table, RIGHT_ACTION, 1)],
-                axis=1,
-            )
-            modes = np.concatenate([_vector(table, LEFT_MODE, 1), _vector(table, RIGHT_MODE, 1)], axis=1)
+            states = _vector(table, STATE_KEY, 20)
+            actions = _vector(table, ACTION_KEY, 20)
+            if has_gripper:
+                states = np.concatenate([states, _vector(table, LEFT_STATE, 1), _vector(table, RIGHT_STATE, 1)], axis=1)
+                actions = np.concatenate([actions, _vector(table, LEFT_ACTION, 1), _vector(table, RIGHT_ACTION, 1)], axis=1)
+                modes = np.concatenate([_vector(table, LEFT_MODE, 1), _vector(table, RIGHT_MODE, 1)], axis=1)
+            else:
+                # Storage placeholders are never valid labels and never become
+                # physical feedback tokens; `action_mask` records availability.
+                states = np.pad(states, ((0, 0), (0, 2)))
+                actions = np.pad(actions, ((0, 0), (0, 2)))
+                modes = np.zeros((n, 2), dtype=np.float32)
             if not np.isfinite(actions).all() or not np.all(modes == 0):
                 raise ValueError(f"Episode {episode_id}: nonfinite action or gripper mode other than POSITION")
             if np.any((actions[:, 20:] < 0) | (actions[:, 20:] > 100)):
@@ -346,7 +423,9 @@ class EngramDataset:
             short_horizon_anchors += int(np.sum(valid & ~enough_future))
             valid &= enough_future
             anchors = np.flatnonzero(valid)
-            if split != "val" and prune_threshold_rad > 0:
+            # Missing end-effector labels make the gripper-only exception
+            # undecidable; retain these anchors instead of discarding them.
+            if split != "val" and prune_threshold_rad > 0 and has_gripper:
                 moving = _moving_anchors(
                     timestamps,
                     states,
@@ -460,5 +539,113 @@ class EngramDataset:
             "observation/head_rgbd": self._read_image(episode, float(episode.timestamps[anchor])),
             "observation/joint_position": episode.states[anchor].copy(),
             "actions": episode.actions[indices].copy(),
+            "action_mask": np.array([True] * 20 + [self.has_gripper] * 2),
             "prompt": self.tasks[int(episode.task_indices[anchor])],
         }
+
+
+class EngramMultiDataset:
+    """Concatenate pinned exports while preserving recording-package split boundaries."""
+
+    def __init__(self, manifest: str | Path, action_horizon: int, **kwargs) -> None:
+        spec = _read_source_manifest(manifest)
+        self.datasets = [
+            EngramDataset(
+                item["root"],
+                action_horizon,
+                has_gripper=item["has_gripper"],
+                validation_packages=frozenset(item["validation_packages"]),
+                **kwargs,
+            )
+            for item in spec["sources"]
+        ]
+        self.offsets = np.cumsum([0, *[len(dataset) for dataset in self.datasets]], dtype=np.int64)
+
+    def __len__(self) -> int:
+        return int(self.offsets[-1])
+
+    def __getitem__(self, index: SupportsIndex) -> dict:
+        idx = index.__index__()
+        if idx < 0 or idx >= len(self):
+            raise IndexError(idx)
+        dataset_index = int(np.searchsorted(self.offsets, idx, side="right") - 1)
+        return self.datasets[dataset_index][idx - self.offsets[dataset_index]]
+
+    def close(self) -> None:
+        for dataset in self.datasets:
+            dataset.close()
+
+
+def compute_training_stats(
+    dataset: EngramDataset | EngramMultiDataset, *, seed: int, max_frames: int | None = None, batch_size: int = 512
+) -> tuple[dict[str, normalize.NormStats], dict[str, int]]:
+    """Fit all retained anchors; never include unlabeled end-effector placeholders.
+
+    Each anchor contributes one state and its complete future action horizon.
+    The same joint-delta and Gaussian-noise distribution used by training is
+    applied in vectorized batches. Quantiles use OpenPI's running histograms.
+    """
+    if batch_size < 1 or (max_frames is not None and max_frames < 2):
+        raise ValueError("Statistics batch size must be positive and max_frames at least two")
+    rng = np.random.default_rng(seed)
+    count = len(dataset)
+    if max_frames is None or max_frames >= count:
+        selected = None
+    else:
+        selected = np.sort(rng.choice(count, size=max_frames, replace=False))
+    accumulators = {key: normalize.RunningStats() for key in ("joint_state", "joint_action", "grip_state", "grip_action")}
+    parts = dataset.datasets if isinstance(dataset, EngramMultiDataset) else [dataset]
+    global_offset = 0
+    used = 0
+    grip_used = 0
+    episode_count = 0
+    for part in parts:
+        for episode, begin in zip(part.episodes, part.offsets[:-1], strict=True):
+            lo = global_offset + int(begin)
+            hi = lo + len(episode.anchors)
+            if selected is None:
+                anchors = episode.anchors
+            else:
+                subset = selected[np.searchsorted(selected, lo) : np.searchsorted(selected, hi)] - lo
+                anchors = episode.anchors[subset]
+            for start in range(0, len(anchors), batch_size):
+                anchors_batch = anchors[start : start + batch_size]
+                offsets = np.arange(part.action_horizon, dtype=np.float64) / part.fps
+                targets = episode.timestamps[anchors_batch, None] + offsets
+                right = np.searchsorted(episode.timestamps, targets, side="left")
+                right = np.minimum(np.maximum(right, anchors_batch[:, None]), len(episode.timestamps) - 1)
+                left = np.maximum(right - 1, anchors_batch[:, None])
+                indices = np.where(
+                    np.abs(episode.timestamps[left] - targets) <= np.abs(episode.timestamps[right] - targets), left, right
+                )
+                state = episode.states[anchors_batch].copy()
+                action = episode.actions[indices].copy()
+                action[..., :20] -= state[:, None, :20]
+                noise = rng.normal(0, 0.001, size=(len(anchors_batch), 20)).astype(np.float32)
+                state[:, :20] += noise
+                action[..., :20] -= noise[:, None, :]
+                accumulators["joint_state"].update(state[:, :20])
+                accumulators["joint_action"].update(action[..., :20])
+                used += len(anchors_batch)
+                if part.has_gripper:
+                    accumulators["grip_state"].update(state[:, 20:])
+                    accumulators["grip_action"].update(action[..., 20:])
+                    grip_used += len(anchors_batch)
+            episode_count += 1
+            if episode_count % 20 == 0:
+                print(f"Engram stats: {episode_count} episodes, {used} anchors, {grip_used} labeled-gripper anchors", flush=True)
+        global_offset += len(part)
+    if used != (len(selected) if selected is not None else count):
+        raise ValueError("Statistics did not cover the requested anchors exactly")
+    if grip_used < 2:
+        raise ValueError("Cannot fit gripper statistics without labeled training anchors")
+    result = {}
+    for output_key, joint_key, grip_key in (
+        ("state", "joint_state", "grip_state"), ("actions", "joint_action", "grip_action")
+    ):
+        joint = accumulators[joint_key].get_statistics()
+        grip = accumulators[grip_key].get_statistics()
+        result[output_key] = normalize.NormStats(
+            **{name: np.concatenate([getattr(joint, name), getattr(grip, name)]) for name in ("mean", "std", "q01", "q99")}
+        )
+    return floor_quantile_ranges(result), {"used_anchors": used, "labeled_gripper_anchors": grip_used, "total_anchors": count}

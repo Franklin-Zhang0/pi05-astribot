@@ -27,3 +27,19 @@ def test_validation_reports_action_errors_in_physical_units():
     assert result["joint_rmse_rad"] == 0.5
     assert result["left_gripper_rmse_percent"] == 20
     assert result["right_gripper_rmse_percent"] == 40
+
+
+def test_validation_excludes_missing_gripper_labels_from_metrics():
+    class MixedDataset(_Dataset):
+        def __getitem__(self, index):
+            sample = super().__getitem__(index)
+            sample["action_mask"] = np.array([True] * 20 + [index == 0] * 2)
+            if index != 0:
+                sample["actions"][:, 20:] = 1000
+            return sample
+
+    result = evaluate_samples(MixedDataset(), _ZeroPolicy(), max_samples=3, seed=42)
+    assert result["action_steps"] == 12
+    assert result["gripper_action_steps"] == 4
+    assert result["left_gripper_rmse_percent"] == 20
+    assert result["right_gripper_rmse_percent"] == 40

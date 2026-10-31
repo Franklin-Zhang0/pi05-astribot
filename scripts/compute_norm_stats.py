@@ -148,6 +148,34 @@ def main(
         data_config = dataclasses.replace(data_config, engram_decode_images=False)
         np.random.seed(config.seed)
 
+        # Use a vectorized exact anchor traversal. In particular, placeholders
+        # from joint-only recordings must not alter gripper statistics, and the
+        # final partial batch must not be silently dropped.
+        from openpi.training.engram_dataset import compute_training_stats, stats_identity
+
+        dataset = _data_loader.create_torch_dataset(data_config, config.model.action_horizon, config.model)
+        norm_stats, counts = compute_training_stats(dataset, seed=config.seed, max_frames=max_frames)
+        output_path = config.assets_dirs / data_config.asset_id
+        normalize.save(output_path, norm_stats)
+        manifest = stats_identity(
+            data_config.engram_data_dir, data_config.engram_split, config.model.action_horizon,
+            data_config.engram_prune_threshold_rad, data_config.engram_gripper_threshold_percent,
+        )
+        manifest.update({
+            "source_root": str(data_config.engram_data_dir),
+            "max_frames": max_frames,
+            "sampled_anchors": counts["used_anchors"],
+            "labeled_gripper_anchors": counts["labeled_gripper_anchors"],
+            "total_training_anchors": counts["total_anchors"],
+            "seed": config.seed,
+            "joint_quantile_span_floor_radians": 0.1,
+            "gripper_quantile_span_floor_percent": 5.0,
+            "norm_stats_sha256": hashlib.sha256((output_path / "norm_stats.json").read_bytes()).hexdigest(),
+        })
+        (output_path / "engram_stats_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        print(f"Wrote Engram stats to {output_path}: {counts}")
+        return
+
     if data_config.rlds_data_dir is not None:
         data_loader, num_batches = create_rlds_dataloader(
             data_config, config.model.action_horizon, config.batch_size, max_frames
