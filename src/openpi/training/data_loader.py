@@ -137,6 +137,19 @@ def create_torch_dataset(
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
 
+    if data_config.engram_data_dir is not None:
+        # Lazy import keeps the existing LeRobot v2 and fake-data paths untouched.
+        from openpi.training import engram_dataset
+
+        return engram_dataset.EngramDataset(
+            data_config.engram_data_dir,
+            action_horizon,
+            split=data_config.engram_split,
+            prune_threshold_rad=data_config.engram_prune_threshold_rad,
+            gripper_threshold_percent=data_config.engram_gripper_threshold_percent,
+            decode_images=data_config.engram_decode_images,
+        )
+
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
     video_backend = os.environ.get("LEROBOT_VIDEO_BACKEND")
     if video_backend not in (None, "pyav", "torchcodec", "video_reader"):
@@ -303,6 +316,20 @@ def create_torch_data_loader(
             execute in the main process.
         seed: The seed to use for shuffling the data.
     """
+    if data_config.engram_data_dir is not None and not skip_norm_stats:
+        if data_config.norm_stats is None:
+            raise ValueError("Engram normalization statistics missing; run scripts/compute_norm_stats.py first")
+        from openpi.training import engram_dataset
+
+        engram_dataset.check_stats_identity(
+            data_config.engram_stats_manifest,
+            data_config.engram_data_dir,
+            data_config.engram_split,
+            action_horizon,
+            data_config.engram_prune_threshold_rad,
+            data_config.engram_gripper_threshold_percent,
+            allow_sampled_stats=data_config.engram_allow_sampled_stats,
+        )
     dataset = create_torch_dataset(data_config, action_horizon, model_config)
     dataset = transform_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats)
 

@@ -20,6 +20,7 @@ import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.astribot_policy as astribot_policy
 import openpi.policies.droid_policy as droid_policy
+import openpi.policies.engram_policy as engram_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
@@ -97,6 +98,14 @@ class DataConfig:
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     # List of datasets to sample from: name, version, weight, and optionally filter_dict_path
     datasets: Sequence[droid_rlds_dataset.RLDSDataset] = ()
+    # Local Engram LeRobot v3 data (the pinned LeRobot reader only supports v2).
+    engram_data_dir: str | None = None
+    engram_split: Literal["all", "train", "val"] = "all"
+    engram_prune_threshold_rad: float = 0.01
+    engram_gripper_threshold_percent: float = 0.0
+    engram_allow_sampled_stats: bool = False
+    engram_decode_images: bool = True
+    engram_stats_manifest: str | None = None
 
 
 class GroupFactory(Protocol):
@@ -223,6 +232,50 @@ class SimpleDataConfig(DataConfigFactory):
             self.create_base_config(assets_dirs, model_config),
             data_transforms=self.data_transforms(model_config),
             model_transforms=self.model_transforms(model_config),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class EngramDataConfig(DataConfigFactory):
+    """Dex W1 full successful episodes with joint and position-gripper targets."""
+
+    repo_id: str = "engram/dex_w1_sandwich"
+    data_root: str = (
+        "/hand_keypoint_data/engram_data/kitchen_new/"
+        "req0148_st028_1793266078098_lerobot/trainable"
+    )
+    split: Literal["all", "train", "val"] = "train"
+    prune_threshold_rad: float = 0.01
+    gripper_threshold_percent: float = 0.0
+    allow_sampled_stats: bool = False
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        joint_mask = _transforms.make_bool_mask(20, -2)
+        data_transforms = _transforms.Group(
+            inputs=[astribot_policy.AstribotInputs(model_type=model_config.model_type)],
+            outputs=[astribot_policy.AstribotOutputs(action_dim=22)],
+        ).push(
+            inputs=[_transforms.DeltaActions(joint_mask)],
+            outputs=[_transforms.AbsoluteActions(joint_mask)],
+        )
+        if self.split != "val":
+            data_transforms = data_transforms.push(inputs=[engram_policy.ExactJointNoiseCompensation(std=0.001)])
+        # Validation uses the training statistics, never validation-derived
+        # statistics. All-data runs have a distinct asset namespace.
+        asset_split = "all" if self.split == "all" else "train"
+        factory = dataclasses.replace(self, repo_id=f"{self.repo_id}_{asset_split}")
+        base = factory.create_base_config(assets_dirs, model_config)
+        return dataclasses.replace(
+            base,
+            engram_data_dir=self.data_root,
+            engram_split=self.split,
+            engram_prune_threshold_rad=self.prune_threshold_rad,
+            engram_gripper_threshold_percent=self.gripper_threshold_percent,
+            engram_allow_sampled_stats=self.allow_sampled_stats,
+            engram_stats_manifest=str(pathlib.Path(self.assets.assets_dir or assets_dirs) / base.asset_id / "engram_stats_manifest.json"),
+            data_transforms=data_transforms,
+            model_transforms=ModelTransformFactory()(model_config),
         )
 
 
@@ -559,6 +612,25 @@ class TrainConfig:
 
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS = [
+    TrainConfig(
+        name="pi05_engram_w1_sandwich",
+        # 22 physical dimensions fit in the base model's native 32D action head.
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=64),
+        data=EngramDataConfig(),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        batch_size=64,
+        num_train_steps=20_001,
+        save_interval=10_000,
+        keep_period=10_000,
+        log_interval=100,
+        num_workers=4,
+        policy_metadata={
+            "robot": "dex_w1",
+            "state_action_layout": "20 joint radians, left gripper percent, right gripper percent",
+            "camera": "left half of observation.images.kfc_compressed stereo video",
+            "action_rate_hz": 30,
+        },
+    ),
     #
     # Astribot fine-tuning configs.
     #

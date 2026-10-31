@@ -5,6 +5,10 @@ will compute the mean and standard deviation of the data in the dataset and save
 to the config assets directory.
 """
 
+import dataclasses
+import hashlib
+import json
+
 import numpy as np
 import tqdm
 import tyro
@@ -28,6 +32,7 @@ def create_torch_dataloader(
     model_config: _model.BaseModelConfig,
     num_workers: int,
     max_frames: int | None = None,
+    seed: int = 0,
 ) -> tuple[_data_loader.Dataset, int]:
     if data_config.repo_id is None:
         raise ValueError("Data config must have a repo_id")
@@ -53,6 +58,7 @@ def create_torch_dataloader(
         num_workers=num_workers,
         shuffle=shuffle,
         num_batches=num_batches,
+        seed=seed,
     )
     return data_loader, num_batches
 
@@ -86,9 +92,61 @@ def create_rlds_dataloader(
     return data_loader, num_batches
 
 
-def main(config_name: str, max_frames: int | None = None):
+def main(
+    config_name: str,
+    max_frames: int | None = None,
+    engram_data_root: str | None = None,
+    engram_split: str | None = None,
+    engram_prune_threshold_rad: float | None = None,
+    engram_gripper_threshold_percent: float | None = None,
+    assets_base_dir: str | None = None,
+    batch_size: int | None = None,
+    num_workers: int | None = None,
+):
     config = _config.get_config(config_name)
+    if (
+        engram_data_root is not None
+        or engram_split is not None
+        or engram_prune_threshold_rad is not None
+        or engram_gripper_threshold_percent is not None
+    ):
+        if not isinstance(config.data, _config.EngramDataConfig):
+            raise ValueError("Engram dataset overrides require an Engram config")
+        data_kwargs = {}
+        if engram_data_root is not None:
+            data_kwargs["data_root"] = engram_data_root
+        if engram_split is not None:
+            if engram_split not in ("all", "train"):
+                raise ValueError("Normalization statistics may only be fit on train or all, never validation")
+            data_kwargs["split"] = engram_split
+        if engram_prune_threshold_rad is not None:
+            data_kwargs["prune_threshold_rad"] = engram_prune_threshold_rad
+        if engram_gripper_threshold_percent is not None:
+            data_kwargs["gripper_threshold_percent"] = engram_gripper_threshold_percent
+        config = dataclasses.replace(config, data=dataclasses.replace(config.data, **data_kwargs))
+    if assets_base_dir is not None:
+        config = dataclasses.replace(config, assets_base_dir=assets_base_dir)
+    if batch_size is not None:
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        config = dataclasses.replace(config, batch_size=batch_size)
+    if num_workers is not None:
+        if num_workers < 0:
+            raise ValueError("num_workers cannot be negative")
+        config = dataclasses.replace(config, num_workers=num_workers)
+    if max_frames is not None and max_frames < config.batch_size:
+        raise ValueError("max_frames must be at least batch_size")
     data_config = config.data.create(config.assets_dirs, config.model)
+
+    if data_config.engram_data_dir is not None and data_config.engram_split == "val":
+        raise ValueError("Normalization statistics may not be fit on validation")
+
+    if data_config.engram_data_dir is not None:
+        # Only proprioception and actions contribute to these statistics. Avoid
+        # decoding the 4K stereo video while retaining exactly the training
+        # anchors, physical-time action chunks and input transforms.
+        data_config = dataclasses.replace(data_config, engram_decode_images=False)
+        np.random.seed(config.seed)
 
     if data_config.rlds_data_dir is not None:
         data_loader, num_batches = create_rlds_dataloader(
@@ -96,7 +154,13 @@ def main(config_name: str, max_frames: int | None = None):
         )
     else:
         data_loader, num_batches = create_torch_dataloader(
-            data_config, config.model.action_horizon, config.batch_size, config.model, config.num_workers, max_frames
+            data_config,
+            config.model.action_horizon,
+            config.batch_size,
+            config.model,
+            config.num_workers,
+            max_frames,
+            seed=config.seed if data_config.engram_data_dir is not None else 0,
         )
 
     keys = ["state", "actions"]
@@ -108,9 +172,38 @@ def main(config_name: str, max_frames: int | None = None):
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
 
-    output_path = config.assets_dirs / data_config.repo_id
+    if data_config.engram_data_dir is not None:
+        from openpi.training.engram_dataset import floor_quantile_ranges
+
+        norm_stats = floor_quantile_ranges(norm_stats)
+
+    output_path = config.assets_dirs / (
+        data_config.asset_id if data_config.engram_data_dir is not None else data_config.repo_id
+    )
     print(f"Writing stats to: {output_path}")
     normalize.save(output_path, norm_stats)
+    if data_config.engram_data_dir is not None:
+        from openpi.training.engram_dataset import stats_identity
+
+        manifest = stats_identity(
+            data_config.engram_data_dir,
+            data_config.engram_split,
+            config.model.action_horizon,
+            data_config.engram_prune_threshold_rad,
+            data_config.engram_gripper_threshold_percent,
+        )
+        manifest.update(
+            {
+                "source_root": str(data_config.engram_data_dir),
+                "max_frames": max_frames,
+                "sampled_anchors": num_batches * config.batch_size,
+                "seed": config.seed,
+                "joint_quantile_span_floor_radians": 0.1,
+                "gripper_quantile_span_floor_percent": 5.0,
+                "norm_stats_sha256": hashlib.sha256((output_path / "norm_stats.json").read_bytes()).hexdigest(),
+            }
+        )
+        (output_path / "engram_stats_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures as futures
 import dataclasses
+import hashlib
+import json
 import logging
 from typing import Protocol
 
@@ -74,6 +76,12 @@ def save_state(
         norm_stats = data_config.norm_stats
         if norm_stats is not None and data_config.asset_id is not None:
             _normalize.save(directory / data_config.asset_id, norm_stats)
+            if data_config.engram_stats_manifest is not None:
+                manifest = json.loads(epath.Path(data_config.engram_stats_manifest).read_text())
+                manifest["norm_stats_sha256"] = hashlib.sha256(
+                    (directory / data_config.asset_id / "norm_stats.json").read_bytes()
+                ).hexdigest()
+                (directory / data_config.asset_id / "engram_stats_manifest.json").write_text(json.dumps(manifest, indent=2))
 
     # Split params that can be used for inference into a separate item.
     with at.disable_typechecking():
@@ -92,7 +100,23 @@ def restore_state(
     data_loader: _data_loader.DataLoader,
     step: int | None = None,
 ) -> training_utils.TrainState:
-    del data_loader
+    data_config = data_loader.data_config()
+    if data_config.engram_stats_manifest is not None:
+        restored_step = checkpoint_manager.latest_step() if step is None else step
+        if restored_step is None:
+            raise ValueError("No checkpoint is available to resume")
+        saved_dir = checkpoint_manager.directory / str(restored_step) / "assets" / data_config.asset_id
+        try:
+            checkpoint_stats = _normalize.load(saved_dir)
+            checkpoint_manifest = json.loads((saved_dir / "engram_stats_manifest.json").read_text())
+            current_manifest = json.loads(epath.Path(data_config.engram_stats_manifest).read_text())
+        except FileNotFoundError as exc:
+            raise ValueError("Engram checkpoint normalization or provenance is missing") from exc
+        if (
+            _normalize.serialize_json(checkpoint_stats) != _normalize.serialize_json(data_config.norm_stats)
+            or checkpoint_manifest != current_manifest
+        ):
+            raise ValueError("Cannot resume Engram training with changed normalization statistics or provenance")
 
     with at.disable_typechecking():
         # Split params that can be used for inference into a separate item.
