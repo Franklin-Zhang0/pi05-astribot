@@ -2,6 +2,30 @@
 
 The current mixed-data run uses 820 complete episodes: 778 for training and 42 for validation. It trains 20 joint deltas, with gripper supervision only where labels are available. It uses left-camera 640×360 video proxies, a global batch size of 256, and checkpoints every 10,000 steps. See the [mixed-data training recipe](#mixed-end-effector-snapshot-2026-11-01) for details.
 
+## Action split and horizon
+
+The physical action uses the same zero-based ordering as the measured input state:
+
+| Indices | Dimensions | Body part | Channels |
+| --- | ---: | --- | --- |
+| 0–3 | 4 | Body | `ANKLE`, `KNEE`, `BUTTOCK`, `WAIST` |
+| 4–5 | 2 | Neck | `NECK1`, `NECK2` |
+| 6–12 | 7 | Left arm | `LEFT_J1`–`LEFT_J7` |
+| 13–19 | 7 | Right arm | `RIGHT_J1`–`RIGHT_J7` |
+| 20 | 1 | Left gripper | Absolute position in percent, when available |
+| 21 | 1 | Right gripper | Absolute position in percent, when available |
+
+The first 20 channels are joint positions in radians. Before noise augmentation and normalization, the training target at each step `h` is `joint_command[t+h] - measured_joint_position[t]`; all 64 steps use the **same current observation** as their reference. Gripper targets are absolute positions in percent and are supervised only when their labels are present. Joint noise augmentation compensates the joint delta so that it preserves the original absolute target.
+
+OpenPI pads the 22 physical slots with 10 zero-valued dimensions at indices 22–31 for the model's 32-dimensional action head. These padding dimensions are not robot actions and are removed from the served result. When gripper feedback is unavailable, the two gripper slots are masked during training and omitted from the server response; the hand-only exports do not provide finger-action labels.
+
+The server unnormalizes the predictions and adds the current measured joint positions back to the joint deltas. Thus, `prediction["actions"]` contains **absolute** targets over a 64-step horizon at nominal 30 Hz:
+
+- Shape `(64, 22)` when both grippers are available: `[:, :20]` contains joint targets, `[:, 20]` the left gripper, and `[:, 21]` the right gripper.
+- Shape `(64, 20)` when gripper feedback is unavailable: `[:, :20]` contains the joint targets and there are no gripper columns.
+
+The server returns raw predictions without clipping; the 20 joint outputs are radians and gripper outputs are percentages. It does not execute the targets.
+
 ## Serve a completed checkpoint
 
 The Engram server uses OpenPI's existing WebSocket policy protocol. It reads a completed checkpoint's parameters, normalization statistics and provenance, and checks the saved statistics hash and strict 640-pixel training contract. A completed checkpoint may be copied to a directory with a nonnumeric name. It does not open the training dataset or require its original mount paths. The server imposes the active run's single-camera configuration; the checkpoint's saved video contract does not itself record that flag. The PaliGemma tokenizer must be available at `$OPENPI_DATA_HOME/big_vision/paligemma_tokenizer.model` (or `~/.cache/openpi/big_vision/paligemma_tokenizer.model` if the variable is unset).
