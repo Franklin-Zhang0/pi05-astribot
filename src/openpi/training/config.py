@@ -105,6 +105,10 @@ class DataConfig:
     engram_gripper_threshold_percent: float = 0.0
     engram_allow_sampled_stats: bool = False
     engram_decode_images: bool = True
+    engram_video_mode: Literal["original", "proxy_640"] = "original"
+    engram_proxy_root: str | None = None
+    engram_proxy_subset_only: bool = False
+    engram_video_identity: str | None = None
     engram_stats_manifest: str | None = None
 
 
@@ -251,6 +255,11 @@ class EngramDataConfig(DataConfigFactory):
     # All Engram wrist cameras are absent. Opt in to removing their masked
     # tokens from the actual vision/language computation.
     single_camera: bool = False
+    # Proxy mode must be explicitly selected; original stereo remains default.
+    video_mode: Literal["original", "proxy_640"] = "original"
+    proxy_root: str | None = None
+    # Profiling-only: use only episodes with completed proxy sidecars.
+    proxy_subset_only: bool = False
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -283,6 +292,9 @@ class EngramDataConfig(DataConfigFactory):
             engram_prune_threshold_rad=self.prune_threshold_rad,
             engram_gripper_threshold_percent=self.gripper_threshold_percent,
             engram_allow_sampled_stats=self.allow_sampled_stats,
+            engram_video_mode=self.video_mode,
+            engram_proxy_root=self.proxy_root,
+            engram_proxy_subset_only=self.proxy_subset_only,
             engram_stats_manifest=str(pathlib.Path(self.assets.assets_dir or assets_dirs) / base.asset_id / "engram_stats_manifest.json"),
             data_transforms=data_transforms,
             model_transforms=model_transforms,
@@ -575,6 +587,8 @@ class TrainConfig:
     # Number of workers to use for the data loader. Increasing this number will speed up data loading but
     # will increase memory and CPU usage.
     num_workers: int = 2
+    # Number of whole batches prefetched by each worker (PyTorch default: 2).
+    prefetch_factor: int = 2
     # Number of train steps (batches) to run.
     num_train_steps: int = 30_000
 

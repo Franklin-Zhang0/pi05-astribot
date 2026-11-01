@@ -1,6 +1,7 @@
 import dataclasses
 
 import jax
+import pytest
 
 from openpi.models import pi0_config
 from openpi.training import config as _config
@@ -45,6 +46,17 @@ def test_torch_data_loader_parallel():
 
     for batch in batches:
         assert all(x.shape[0] == 4 for x in jax.tree.leaves(batch))
+
+
+def test_prefetch_factor_applies_only_to_workers():
+    config = pi0_config.Pi0Config(action_dim=24, action_horizon=50, max_token_len=48)
+    dataset = _data_loader.FakeDataset(config, 10)
+    serial = _data_loader.TorchDataLoader(dataset, local_batch_size=4, prefetch_factor=4)
+    parallel = _data_loader.TorchDataLoader(dataset, local_batch_size=4, num_workers=2, prefetch_factor=4)
+    assert serial.torch_loader.prefetch_factor is None
+    assert parallel.torch_loader.prefetch_factor == 4
+    with pytest.raises(ValueError, match="prefetch_factor"):
+        _data_loader.TorchDataLoader(dataset, local_batch_size=4, num_workers=2, prefetch_factor=0)
 
 
 def test_with_fake_dataset():

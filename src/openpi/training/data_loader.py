@@ -1,4 +1,5 @@
 from collections.abc import Iterator, Sequence
+import dataclasses
 import logging
 import multiprocessing
 import os
@@ -154,6 +155,9 @@ def create_torch_dataset(
             prune_threshold_rad=data_config.engram_prune_threshold_rad,
             gripper_threshold_percent=data_config.engram_gripper_threshold_percent,
             decode_images=data_config.engram_decode_images,
+            video_mode=data_config.engram_video_mode,
+            proxy_root=data_config.engram_proxy_root,
+            proxy_subset_only=data_config.engram_proxy_subset_only,
         )
 
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
@@ -285,6 +289,7 @@ def create_data_loader(
         shuffle=shuffle,
         num_batches=num_batches,
         num_workers=config.num_workers,
+        prefetch_factor=config.prefetch_factor,
         seed=config.seed,
         skip_norm_stats=skip_norm_stats,
         framework=framework,
@@ -302,6 +307,7 @@ def create_torch_data_loader(
     shuffle: bool = False,
     num_batches: int | None = None,
     num_workers: int = 0,
+    prefetch_factor: int = 2,
     seed: int = 0,
     framework: str = "jax",
 ) -> DataLoader[tuple[_model.Observation, _model.Actions]]:
@@ -337,6 +343,8 @@ def create_torch_data_loader(
             allow_sampled_stats=data_config.engram_allow_sampled_stats,
         )
     dataset = create_torch_dataset(data_config, action_horizon, model_config)
+    if data_config.engram_data_dir is not None:
+        data_config = dataclasses.replace(data_config, engram_video_identity=dataset.video_identity)
     dataset = transform_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats)
 
     # Use TorchDataLoader for both frameworks
@@ -367,6 +375,7 @@ def create_torch_data_loader(
         sampler=sampler,
         num_batches=num_batches,
         num_workers=num_workers,
+        prefetch_factor=prefetch_factor,
         seed=seed,
         framework=framework,
     )
@@ -428,6 +437,7 @@ class TorchDataLoader:
         sampler: torch.utils.data.Sampler | None = None,
         num_batches: int | None = None,
         num_workers: int = 0,
+        prefetch_factor: int = 2,
         seed: int = 0,
         framework: str = "jax",
     ):
@@ -444,10 +454,13 @@ class TorchDataLoader:
                 indefinitely.
             num_workers: The number of worker processes to use. If zero, the data loader will
                 execute in the main process.
+            prefetch_factor: Number of batches to prefetch per worker when workers are enabled.
             seed: The seed to use for shuffling the data.
         """
         if jax.process_count() > 1:
             raise NotImplementedError("Data loading with multiple processes is not supported.")
+        if prefetch_factor < 1:
+            raise ValueError("prefetch_factor must be positive")
 
         if len(dataset) < local_batch_size:
             raise ValueError(f"Local batch size ({local_batch_size}) is larger than the dataset size ({len(dataset)}).")
@@ -474,6 +487,7 @@ class TorchDataLoader:
             shuffle=(sampler is None and shuffle),  # Don't shuffle if using sampler
             sampler=sampler,
             num_workers=num_workers,
+            prefetch_factor=prefetch_factor if num_workers > 0 else None,
             multiprocessing_context=mp_context,
             persistent_workers=num_workers > 0,
             collate_fn=_collate_fn,

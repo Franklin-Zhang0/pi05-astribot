@@ -19,6 +19,15 @@ import openpi.training.data_loader as _data_loader
 import openpi.training.utils as training_utils
 
 
+def _engram_video_contract(data_config):
+    return {
+        "version": 1,
+        "mode": data_config.engram_video_mode,
+        "profiling_subset_only": data_config.engram_proxy_subset_only,
+        "proxy_identity": data_config.engram_video_identity,
+    }
+
+
 def initialize_checkpoint_dir(
     checkpoint_dir: epath.Path | str, *, keep_period: int | None, overwrite: bool, resume: bool
 ) -> tuple[ocp.CheckpointManager, bool]:
@@ -82,6 +91,9 @@ def save_state(
                     (directory / data_config.asset_id / "norm_stats.json").read_bytes()
                 ).hexdigest()
                 (directory / data_config.asset_id / "engram_stats_manifest.json").write_text(json.dumps(manifest, indent=2))
+                (directory / data_config.asset_id / "engram_video_contract.json").write_text(
+                    json.dumps(_engram_video_contract(data_config), indent=2)
+                )
 
     # Split params that can be used for inference into a separate item.
     with at.disable_typechecking():
@@ -117,6 +129,13 @@ def restore_state(
             or checkpoint_manifest != current_manifest
         ):
             raise ValueError("Cannot resume Engram training with changed normalization statistics or provenance")
+        video_contract_path = saved_dir / "engram_video_contract.json"
+        if video_contract_path.exists():
+            video_contract = json.loads(video_contract_path.read_text())
+            if video_contract != _engram_video_contract(data_config):
+                raise ValueError("Cannot resume Engram training with changed source-video/proxy identity")
+        elif data_config.engram_video_mode != "original" or data_config.engram_proxy_subset_only:
+            raise ValueError("Legacy checkpoint has no proxy identity; resume requires the full original-video set")
 
     with at.disable_typechecking():
         # Split params that can be used for inference into a separate item.

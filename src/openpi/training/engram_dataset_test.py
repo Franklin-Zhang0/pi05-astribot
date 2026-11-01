@@ -1,7 +1,7 @@
 import hashlib
 import json
-import shutil
 from pathlib import Path
+import shutil
 
 import numpy as np
 import pyarrow as pa
@@ -10,8 +10,8 @@ import pytest
 
 from openpi import transforms
 from openpi.models.model import ModelType
-from openpi.policies.astribot_policy import AstribotInputs
 from openpi.policies import engram_policy
+from openpi.policies.astribot_policy import AstribotInputs
 from openpi.policies.engram_policy import ExactJointNoiseCompensation
 from openpi.shared import normalize
 from openpi.training import engram_dataset as engram
@@ -320,7 +320,8 @@ def test_mixed_sources_preserve_masks_and_only_fit_labeled_grippers(v3_fixture, 
     assert len(dataset.datasets) == 2
     labeled, partial = dataset.datasets
     assert labeled[0]["action_mask"].all()
-    assert partial[0]["action_mask"][:20].all() and not partial[0]["action_mask"][20:].any()
+    assert partial[0]["action_mask"][:20].all()
+    assert not partial[0]["action_mask"][20:].any()
     mixed, counts = engram.compute_training_stats(dataset, seed=4, batch_size=2)
     full, full_counts = engram.compute_training_stats(labeled, seed=4, batch_size=2)
     assert counts["used_anchors"] == len(dataset)
@@ -361,3 +362,55 @@ def test_opt_in_single_camera_does_not_discard_supplied_wrist(v3_fixture):
     assert tuple(out["image_mask"]) == ("base_0_rgb",)
     with pytest.raises(ValueError, match="cannot discard"):
         transform({**sample, "observation/left_wrist_rgbd": np.zeros((1, 1, 3), np.uint8)})
+
+
+def test_proxy_reader_fails_closed_and_does_not_crop_square_twice(v3_fixture, monkeypatch):
+    from fractions import Fraction
+    from types import SimpleNamespace
+
+    from openpi.training import engram_video_proxy
+
+    original = v3_fixture / f"videos/{engram.CAMERA_KEY}/chunk-000/file-000.mp4"
+    proxy = engram_video_proxy.proxy_path(v3_fixture, original)
+    with pytest.raises(ValueError, match="proxy sidecar"):
+        engram.EngramDataset(v3_fixture, 2, video_mode="proxy_640")
+    proxy.write_bytes(b"test proxy content")
+    record = {
+        "version": engram_video_proxy.PROXY_VERSION, "source_relative": str(original.relative_to(v3_fixture)),
+        "source_bytes": 0, "source_sha256": hashlib.sha256(b"").hexdigest(), "proxy_bytes": proxy.stat().st_size,
+        "proxy_sha256": hashlib.sha256(proxy.read_bytes()).hexdigest(),
+        "timing": {"proxy": {"width": 640, "height": 360, "color_range": 2}, "max_gop": 4,
+                   "max_pts_error_us": 0, "episodes": [{"episode_index": 0, "rows": 5}, {"episode_index": 1, "rows": 4}]},
+    }
+    engram_video_proxy.sidecar_path(proxy).write_text(json.dumps(record))
+    old_record = {**record, "version": "engram_left640_h264_gop4_v1"}
+    engram_video_proxy.sidecar_path(proxy).write_text(json.dumps(old_record))
+    with pytest.raises(ValueError, match="sidecar does not match"):
+        engram.EngramDataset(v3_fixture, 2, video_mode="proxy_640")
+    engram_video_proxy.sidecar_path(proxy).write_text(json.dumps(record))
+
+    class Frame:
+        pts = 0
+        def to_ndarray(self, format):
+            image = np.zeros((360, 640, 3), np.uint8)
+            image[:, 500, 0] = 123
+            return image
+
+    class Container:
+        streams = SimpleNamespace(video=[SimpleNamespace(time_base=Fraction(1, 1000))])
+        def seek(self, *args, **kwargs):
+            pass
+        def decode(self, stream):
+            return iter([Frame()])
+        def close(self):
+            pass
+
+    monkeypatch.setattr(engram.av, "open", lambda path: Container())
+    dataset = engram.EngramDataset(v3_fixture, 2, video_mode="proxy_640")
+    image = dataset[0]["observation/head_rgbd"]
+    assert image.shape == (360, 640, 3)
+    assert image[0, 500, 0] == 123
+    assert dataset.video_identity is not None
+    proxy.write_bytes(b"bad proxy content!")  # Same length, changed hash.
+    with pytest.raises(ValueError, match="checksum"):
+        engram.EngramDataset(v3_fixture, 2, video_mode="proxy_640")

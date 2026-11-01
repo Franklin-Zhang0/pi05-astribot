@@ -313,9 +313,15 @@ class EngramDataset:
         video_cache_size: int = 4,
         has_gripper: bool = True,
         validation_packages: frozenset[str] | None = None,
+        video_mode: Literal["original", "proxy_640"] = "original",
+        proxy_root: str | Path | None = None,
+        proxy_subset_only: bool = False,
     ) -> None:
         self.root = Path(root)
         self.has_gripper = has_gripper
+        if video_mode not in ("original", "proxy_640"):
+            raise ValueError("Invalid video mode")
+        self.video_mode = video_mode
         self.action_horizon = action_horizon
         self.decode_images = decode_images
         self.video_tolerance_s = video_tolerance_s
@@ -375,6 +381,18 @@ class EngramDataset:
                 raise ValueError(f"Expected validation packages absent from export plan: {sorted(missing)}")
             selected = [row for row in selected if (package_for(row) in heldout) == (split == "val")]
         selected.sort(key=lambda row: int(row["episode_index"]))
+        if proxy_subset_only:
+            from openpi.training import engram_video_proxy
+
+            prefix = f"videos/{CAMERA_KEY}"
+            def has_proxy(row):
+                original = self.root / info["video_path"].format(video_key=CAMERA_KEY,
+                    chunk_index=int(row[f"{prefix}/chunk_index"]), file_index=int(row[f"{prefix}/file_index"]))
+                proxy = engram_video_proxy.proxy_path(self.root, original, None if proxy_root is None else Path(proxy_root))
+                return proxy.is_file() and engram_video_proxy.sidecar_path(proxy).is_file()
+            before = len(selected)
+            selected = [row for row in selected if has_proxy(row)]
+            logging.warning("PROFILING SUBSET: %d of %d %s episodes have completed proxies", len(selected), before, split)
         ids = [int(row["episode_index"]) for row in selected]
         if not ids or len(ids) != len(set(ids)):
             raise ValueError("No full successful episodes or duplicate episode indices")
@@ -382,6 +400,7 @@ class EngramDataset:
         invalid_anchors = 0
         short_horizon_anchors = 0
         static_anchors = 0
+        video_identity = hashlib.sha256() if video_mode == "proxy_640" or proxy_subset_only else None
         for row in selected:
             episode_id = int(row["episode_index"])
             data_path = self.root / info["data_path"].format(
@@ -449,6 +468,17 @@ class EngramDataset:
             )
             if not video_path.is_file():
                 raise FileNotFoundError(video_path)
+            if video_mode == "proxy_640" or proxy_subset_only:
+                from openpi.training import engram_video_proxy
+
+                original = video_path
+                proxy_video_path = engram_video_proxy.proxy_path(
+                    self.root, original, None if proxy_root is None else Path(proxy_root)
+                )
+                record = engram_video_proxy.validate_sidecar(self.root, original, proxy_video_path, episode_id, n)
+                video_identity.update(f"{self.root.parent.name}\0{episode_id}\0{record['source_sha256']}\0{record['proxy_sha256']}\n".encode())
+                if video_mode == "proxy_640":
+                    video_path = proxy_video_path
             episodes.append(
                 _Episode(
                     episode_id,
@@ -462,6 +492,7 @@ class EngramDataset:
                 )
             )
         self.episodes = episodes
+        self.video_identity = None if video_identity is None else video_identity.hexdigest()
         self.invalid_anchors = invalid_anchors
         self.short_horizon_anchors = short_horizon_anchors
         self.static_anchors = static_anchors
@@ -523,6 +554,10 @@ class EngramDataset:
             got = None if selected is None else selected[0]
             raise ValueError(f"Episode {episode.episode_index}: no camera frame near {target:.6f}s (got {got})")
         image = selected[1].to_ndarray(format="rgb24")
+        if self.video_mode == "proxy_640":
+            if image.shape != (360, 640, 3):
+                raise ValueError(f"Expected already-cropped 640x360 RGB proxy, got {image.shape}")
+            return image
         if image.ndim != 3 or image.shape[1] % 2:
             raise ValueError(f"Expected side-by-side stereo image, got {image.shape}")
         return image[:, : image.shape[1] // 2].copy()
@@ -560,6 +595,11 @@ class EngramMultiDataset:
             for item in spec["sources"]
         ]
         self.offsets = np.cumsum([0, *[len(dataset) for dataset in self.datasets]], dtype=np.int64)
+        self.video_identity = (
+            None if self.datasets[0].video_identity is None else hashlib.sha256(
+                "\n".join(dataset.video_identity for dataset in self.datasets).encode()
+            ).hexdigest()
+        )
 
     def __len__(self) -> int:
         return int(self.offsets[-1])

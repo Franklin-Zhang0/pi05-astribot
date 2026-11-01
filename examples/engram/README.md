@@ -62,4 +62,32 @@ uv run examples/engram/evaluate_pi05.py --data-root "$ENGRAM_DATA_ROOT" \
 
 The held-out evaluator reports joint errors across all chosen samples and gripper errors only for samples with actual gripper labels. The mixed policy does not acquire direct finger-control supervision from the hand videos.
 
+### Optional 640-pixel video derivatives
+
+`examples/engram/preprocess_640.py` creates opt-in `*_640.mp4` videos from the left eye of each selected full-success training recording. The 1920×1080 eye is area-resized to 640×360 without padding. Full-range H.264 CRF 18 with a maximum four-frame GOP is lossy: model inputs change slightly. Every derivative is validated against **every original presentation timestamp**, the per-episode annotated timestamps (100 µs tolerance), frame count, full-range metadata, and GOP length before publication. Each has a JSON sidecar containing source and proxy SHA-256. Encoding and MP4 faststart occur in local scratch; publication is exclusive and the sidecar is written last. Completed outputs are reused only after hash verification. An interrupted/orphan output is never overwritten automatically.
+
+Default encoding uses CPU FFmpeg/libx264. `--decoder nvdec --cuda-device 0` explicitly requires CUDA decoding with no software fallback; PyAV transfers decoded frames to host memory, so crop/scale and libx264 encoding remain CPU operations. Inspect CPU-vs-GPU RGB/color-range results with `probe_video_decode.py` before using NVDEC. The source streams must be full range, and the decoder restores that metadata after CUDA transfer.
+
+For a bounded concurrency trial, pass `--cuda-devices 0,1 --workers 4 --workers-per-gpu 2`, or use `--workers 8 --workers-per-gpu 4`. Videos are assigned round-robin, and the per-device limit defaults to one and cannot exceed eight. Each process still encodes on CPU, so benchmark throughput and CPU pressure before scaling up.
+
+```bash
+# Test one complete train video from each source without changing source data.
+uv run examples/engram/preprocess_640.py examples/engram/kitchen_new_20261101.json \
+  --output-root /tmp/engram-proxies --scratch-root /tmp/engram-encoding \
+  --split train --limit-per-source 1 --shortest-first --workers 2
+
+# After qualification, --adjacent replaces --output-root and writes *_640.mp4
+# beside the original recordings. Omit --limit-per-source for all 778 train videos.
+
+# Use the exact same completed-proxy episodes/anchors to compare loader/trainer speed:
+examples/engram/finetune_pi05.sh train proxy-smoke --data.video-mode proxy_640 \
+  --data.proxy-root /tmp/engram-proxies --data.proxy-subset-only
+examples/engram/finetune_pi05.sh train original-smoke --data.video-mode original \
+  --data.proxy-root /tmp/engram-proxies --data.proxy-subset-only
+```
+
+For production proxies beside originals, use `--data.video-mode proxy_640` without `--data.proxy-root` or `--data.proxy-subset-only`. The reader verifies sidecar format, source size, proxy SHA-256 and episode mapping, and never silently falls back to original video. It reads the left-view derivatives directly, without cropping them a second time. The source SHA-256 is verified on builder reuse; the reader checks source size and trusted sidecar identity, rather than rehashing every 4K source at each startup. Checkpoint assets pin the selected proxy identities and prevent resume with a different video mode or profiling subset. Validation videos are not built by the default train-only pass; use the default original-video mode for evaluation, or explicitly preprocess the validation split.
+
+`examples/engram/benchmark_training.py` performs real pretrained π0.5 updates for the subset with completed proxies, using batch 256 on two H100s and saving no checkpoints. Invoke it twice with `--mode original` and `--mode proxy_640`, respectively, using the same seed and other options. Omit `--proxy-root` to compare adjacent proxies on their actual storage. After all training proxies have been created, add `--full-corpus` to sample across the entire training split; the benchmark prints actual per-source episode and anchor counts. The reported loader wait follows each completed GPU step and allows worker prefetch during that step; explicit synchronization makes this diagnostic different from a fully asynchronous end-to-end timing.
+
 `--data.single-camera` is an Engram-only opt-in that removes the two permanently masked wrist-image streams from π0.5's vision and transformer inputs. It does not change the physical state/action data or the statistics. This mode rejects samples that actually provide wrist images; omit the flag to keep the existing three-slot policy interface. The CPU smoke compares losses and gradients against the ordinary masked-wrist path.
