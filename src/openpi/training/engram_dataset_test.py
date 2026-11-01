@@ -175,6 +175,31 @@ def test_pruning_considers_whole_horizon_and_keeps_gripper_targets():
     )
 
 
+def test_joint_only_pruning_ignores_unavailable_end_effector_placeholders():
+    timestamps = np.arange(5, dtype=np.float64) / 30
+    states = np.zeros((5, 22), dtype=np.float32)
+    actions = np.zeros((5, 22), dtype=np.float32)
+    anchors = np.array([0, 1, 2])
+    # Synthetic values prove that absent end-effector placeholders are not
+    # treated as labels or used to decide whether to keep a chunk.
+    actions[2, 20] = 50.0
+    assert not len(engram._moving_anchors(  # noqa: SLF001
+        timestamps, states, actions, anchors, 3, 30, 0.01, 0.0, has_gripper=False
+    ))
+    np.testing.assert_array_equal(
+        engram._moving_anchors(timestamps, states, actions, anchors, 3, 30, 0.01, 0.0),  # noqa: SLF001
+        anchors,
+    )
+    # The threshold is inclusive and applied to all steps of the chunk.
+    actions[2, 7] = np.float32(0.01)
+    np.testing.assert_array_equal(
+        engram._moving_anchors(  # noqa: SLF001
+            timestamps, states, actions, anchors, 3, 30, 0.01, 0.0, has_gripper=False
+        ),
+        anchors,
+    )
+
+
 def test_package_split_prevents_recording_leakage(v3_fixture):
     data_path = v3_fixture / "data/chunk-000/file-000.parquet"
     records = pq.read_table(data_path).to_pylist()
@@ -336,6 +361,39 @@ def test_mixed_sources_preserve_masks_and_only_fit_labeled_grippers(v3_fixture, 
     adapted = engram_policy.MaskUnavailableState()(adapted)
     np.testing.assert_array_equal(adapted["state"][20:], [0, 0])
     assert not adapted["action_mask"][20:22].any()
+
+
+def test_joint_only_source_prunes_train_but_not_validation(v3_fixture, tmp_path):
+    manifest = _mixed_manifest(v3_fixture, tmp_path)
+    spec = json.loads(manifest.read_text())
+    path = Path(spec["sources"][1]["root"]) / "data/chunk-000/file-000.parquet"
+    rows = pq.read_table(path).to_pylist()
+    for row in rows:
+        row[engram.STATE_KEY] = [0.0] * 20
+        row[engram.ACTION_KEY] = [0.0] * 20
+        if row["episode_index"] == 0 and row["frame_index"] == 2:
+            row[engram.ACTION_KEY][7] = 0.01
+    pq.write_table(pa.Table.from_pylist(rows), path)
+
+    dataset = engram.EngramMultiDataset(manifest, 2, split="train", decode_images=False)
+    partial = dataset.datasets[1]
+    np.testing.assert_array_equal(partial.episodes[0].anchors, [1, 2])
+    assert partial.static_anchors == 2
+    assert not partial[0]["action_mask"][20:].any()
+    unfiltered = engram.EngramMultiDataset(manifest, 2, split="train", decode_images=False, prune_threshold_rad=0)
+    assert len(unfiltered.datasets[1]) == 4
+    validation = engram.EngramMultiDataset(manifest, 2, split="val", decode_images=False)
+    assert len(validation.datasets[1]) == 3
+    assert validation.datasets[1].static_anchors == 0
+
+
+def test_joint_only_pruning_rejects_old_statistics_contract(v3_fixture, tmp_path):
+    manifest = tmp_path / "engram_stats_manifest.json"
+    identity = engram.stats_identity(v3_fixture, "all", 64, 0.01, 0.0)
+    identity["contract"] = "engram_w1_delta20_mixed_end_effector_mask_stats_v5"
+    manifest.write_text(json.dumps(identity))
+    with pytest.raises(ValueError, match="statistics do not match"):
+        engram.check_stats_identity(manifest, v3_fixture, "all", 64, 0.01, 0.0)
 
 
 def test_multisource_rejects_duplicate_annotations(v3_fixture, tmp_path):

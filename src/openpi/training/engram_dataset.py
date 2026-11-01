@@ -60,7 +60,7 @@ VAL_PACKAGE_IDS = frozenset(
         "07bc4327-6a40-42f0-8a30-35168b9d73b2",
     }
 )
-STATS_CONTRACT = "engram_w1_delta20_mixed_end_effector_mask_stats_v5"
+STATS_CONTRACT = "engram_w1_delta20_mixed_end_effector_mask_stats_v6_joint_filter_unlabeled"
 _COLUMNS = (
     "timestamp",
     "frame_index",
@@ -267,8 +267,10 @@ def _moving_anchors(
     fps: float,
     threshold: float,
     gripper_threshold_percent: float,
+    *,
+    has_gripper: bool = True,
 ) -> np.ndarray:
-    """Keep a chunk when either joints or grippers have a meaningful target change."""
+    """Keep joint motion or, when labeled, meaningful gripper target change."""
     keep = np.zeros(len(anchors), dtype=bool)
     offsets = np.arange(horizon, dtype=np.float64) / fps
     for start in range(0, len(anchors), 512):
@@ -279,15 +281,16 @@ def _moving_anchors(
         left = np.maximum(right - 1, selected[:, None])
         indices = np.where(np.abs(timestamps[left] - targets) <= np.abs(timestamps[right] - targets), left, right)
         differences = np.abs(actions[indices, :20] - states[selected, None, :20])
-        gripper_differences = np.abs(actions[indices, 20:] - states[selected, None, 20:])
-        gripper_moving = (
-            gripper_differences > 0
-            if gripper_threshold_percent == 0
-            else gripper_differences >= gripper_threshold_percent
-        )
-        keep[start : start + len(selected)] = np.any(differences >= threshold, axis=(1, 2)) | np.any(
-            gripper_moving, axis=(1, 2)
-        )
+        moving = np.any(differences >= threshold, axis=(1, 2))
+        if has_gripper:
+            gripper_differences = np.abs(actions[indices, 20:] - states[selected, None, 20:])
+            gripper_moving = (
+                gripper_differences > 0
+                if gripper_threshold_percent == 0
+                else gripper_differences >= gripper_threshold_percent
+            )
+            moving |= np.any(gripper_moving, axis=(1, 2))
+        keep[start : start + len(selected)] = moving
     return anchors[keep]
 
 
@@ -442,9 +445,9 @@ class EngramDataset:
             short_horizon_anchors += int(np.sum(valid & ~enough_future))
             valid &= enough_future
             anchors = np.flatnonzero(valid)
-            # Missing end-effector labels make the gripper-only exception
-            # undecidable; retain these anchors instead of discarding them.
-            if split != "val" and prune_threshold_rad > 0 and has_gripper:
+            # Apply the joint threshold to every source. The gripper-only
+            # exception applies only where end-effector labels are available.
+            if split != "val" and prune_threshold_rad > 0:
                 moving = _moving_anchors(
                     timestamps,
                     states,
@@ -454,6 +457,7 @@ class EngramDataset:
                     self.fps,
                     prune_threshold_rad,
                     gripper_threshold_percent,
+                    has_gripper=has_gripper,
                 )
                 static_anchors += len(anchors) - len(moving)
                 anchors = moving
