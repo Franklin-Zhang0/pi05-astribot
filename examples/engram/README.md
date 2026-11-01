@@ -1,5 +1,46 @@
 # π0.5 fine-tuning: Engram Dex W1 sandwich
 
+The current mixed-data run uses 820 complete episodes: 778 for training and 42 for validation. It trains 20 joint deltas, with gripper supervision only where labels are available. It uses left-camera 640×360 video proxies, a global batch size of 256, and checkpoints every 10,000 steps. See the [mixed-data training recipe](#mixed-end-effector-snapshot-2026-11-01) for details.
+
+## Serve a completed checkpoint
+
+The Engram server uses OpenPI's existing WebSocket policy protocol. It reads a completed checkpoint's parameters, normalization statistics and provenance, and checks the saved statistics hash and strict 640-pixel training contract. A completed checkpoint may be copied to a directory with a nonnumeric name. It does not open the training dataset or require its original mount paths. The server imposes the active run's single-camera configuration; the checkpoint's saved video contract does not itself record that flag. The PaliGemma tokenizer must be available at `$OPENPI_DATA_HOME/big_vision/paligemma_tokenizer.model` (or `~/.cache/openpi/big_vision/paligemma_tokenizer.model` if the variable is unset).
+
+From the repository root, after the 10,000-step checkpoint has completed:
+
+```bash
+export OPENPI_DATA_HOME=/path/to/openpi_cache  # contains big_vision/paligemma_tokenizer.model
+uv run examples/engram/serve_pi05.py \
+  --checkpoint-dir /hand_keypoint_data/engram_data/ckpt/pi05/20261101_engram_pi05_strict_640g4_b256_2h100/10000 \
+  --host 127.0.0.1 --port 8000 --camera-layout left \
+  --expected-source-manifest-sha256 13b3f4a0df389de3305145449d609cb01f7384656a5305f1e7d20e308ea91eca
+```
+
+The optional source hash shown is for the current 2026-11-01 mixed Engram training run; omit it when deliberately serving another compatible source snapshot. The validated source hash is also exposed in server metadata.
+
+The `--camera-layout` applies to every request: `left` accepts an already-cropped left-eye RGB image; `stereo` selects the left half of a side-by-side stereo RGB image. The selected eye must be 16:9. Images must be HWC `uint8` RGB or floating RGB in `[0, 1]`; the server area-resizes the eye to 640×360, then the unchanged OpenPI pipeline letterboxes it to 224×224. Existing 640×360 left frames are not cropped or rescaled again. Training proxies also underwent YUV conversion and lossy H.264 encoding, so live RGB preprocessing is not bit-identical to those videos.
+
+The state is ordered as **ANKLE, KNEE, BUTTOCK, WAIST, NECK1, NECK2, LEFT_J1–LEFT_J7, RIGHT_J1–RIGHT_J7**, in radians. Supply 20 measured joint positions, or append measured left and right gripper positions in percent `[0, 100]`. A 20D state marks end-effector feedback unavailable. For 22D state, an omitted `action_mask` means both grippers are measured; to use the 22D placeholder layout from the joint-only dataset, supply `action_mask=[True]*20+[False]*2`. Both end-effector mask entries must agree. The server supplies the unavailable marker and masked normalized state; provide the original task prompt without adding that marker yourself. It rejects requests if OpenPI's exact prompt-plus-state token sequence would exceed the model's 200-token limit.
+
+```python
+import numpy as np
+from PIL import Image
+from openpi_client.websocket_client_policy import WebsocketClientPolicy
+
+client = WebsocketClientPolicy(host="127.0.0.1", port=8000)
+observation = {
+    "observation/head_rgbd": np.asarray(Image.open("left_rgb.png").convert("RGB")),
+    "observation/joint_position": np.load("measured_joints_rad.npy"),  # shape (20,)
+    "prompt": "dual gripperopen bread bag and take out bread slice",
+}
+prediction = client.infer(observation)
+print(prediction["actions"].shape, prediction["gripper_available"])  # (64, 20), False
+```
+
+The example prompt is a task string from training; a caller can provide another task instruction. The returned `actions` are **predicted absolute targets** at the nominal 30 Hz, for a 64-step horizon. They contain 20 joints when end-effector feedback is unavailable, or 20 joints plus two absolute gripper percentages when it is available. These are raw, unbounded predictions: values are not clipped, so predicted gripper percentages can fall outside `[0, 100]`. The policy does not infer finger commands from the unlabeled hand videos; do not represent a dexterous hand as two gripper values. This server returns predictions and does not execute robot commands.
+
+## Original single-export recipe
+
 This recipe starts from `pi05_base`, follows the Astribot 64-step fine-tuning recipe, and trains on the full successful episodes of the gripper-equipped export. The source dataset is read-only; the 113-episode export without gripper commands and partial fragments are not included. It uses the OpenPI-pinned LeRobot v2 environment with a local v3 reader rather than attempting to open v3 metadata with the v2 loader.
 
 The implementation follows this repository's Astribot checkout. For background, see the [upstream OpenPI training configuration](https://github.com/Physical-Intelligence/openpi/blob/main/src/openpi/training/config.py) and [LeRobot v3 format documentation](https://huggingface.co/docs/lerobot/lerobot-dataset-v3). This OpenPI repository is distributed under its [Apache-2.0 license](../../LICENSE).
@@ -8,7 +49,7 @@ The default split holds out entire source recording packages. The train split ha
 
 Each state/action is ordered as `[20 body/head/arm joints, left gripper, right gripper]`. The joint values are radians, grippers are percentages. The measured state uses joint feedback and gripper feedback. Targets use joint position commands and gripper position commands; non-position gripper modes and invalid action values are rejected. Joint targets are converted to deltas from the current joint state; gripper targets remain absolute. OpenPI pads the 22 physical dimensions to the pretrained model's native action dimension of 32. Like the Astribot recipe, proprioceptive noise uses `std=0.001`; here compensation is exact, so noisy state plus noisy delta reconstructs the original joint target. Gripper channels are unaffected. The inverse restores absolute joint targets and leaves grippers absolute.
 
-The current observation is the full left 1920×1080 half of the side-by-side `kfc_compressed` video, letterboxed by OpenPI to 224×224. The other camera slots are masked. Video is decoded on demand at the anchor's actual timestamp using bounded keyframe seeking and must match the row timestamp within 100 μs. For each anchor, the 64 actions are selected nearest to times `t + k/30 s`, using source timestamps. Episodes with gaps greater than 250 ms are rejected, and anchors without a complete future horizon are excluded because the model loss does not consume a padding mask. A missing or invalid gripper feedback value excludes that observation anchor but does not remove its otherwise valid action from neighboring horizons.
+For this original recipe, the observation is the full left 1920×1080 half of the side-by-side `kfc_compressed` video, letterboxed by OpenPI to 224×224. The other camera slots are masked. Video is decoded on demand at the anchor's actual timestamp using bounded keyframe seeking and must match the row timestamp within 100 μs. For each anchor, the 64 actions are selected nearest to times `t + k/30 s`, using source timestamps. Episodes with gaps greater than 250 ms are rejected, and anchors without a complete future horizon are excluded because the model loss does not consume a padding mask. A missing or invalid gripper feedback value excludes that observation anchor but does not remove its otherwise valid action from neighboring horizons.
 
 For labeled gripper episodes, the training split excludes an anchor only when **all** 20 joint targets across its entire future horizon differ from the current joint state by less than 0.01 rad **and** all gripper targets equal their current measured gripper positions. This keeps gripper-only chunks as well as any chunk with later meaningful joint motion; retained samples supervise both grippers. Validation does not apply the static filter. Set `ENGRAM_PRUNE_THRESHOLD_RAD=0` for an explicitly chosen unfiltered training run, or set `ENGRAM_GRIPPER_THRESHOLD_PERCENT` to a positive deadband if desired; recompute statistics after changing either setting.
 
@@ -46,6 +87,8 @@ The pinned [multi-source manifest](kitchen_new_20261101.json) combines the origi
 
 All sources supervise the same 20 joint deltas. For the 370 episodes without end-effector annotations, a prompt marker explicitly says `End-effector state unavailable`, neutral normalized state tokens occupy the two unavailable gripper slots, and their flow inputs are pure noise and their output loss is masked. No finger labels are invented. For these joint-only episodes, the training filter drops chunks when all joint target movements across the horizon are below 0.01 rad. Their end-effector activity is unobserved, so this can also drop gripper-only or finger-only activity. Labeled gripper episodes keep the original joint-or-gripper motion pruning rule. Gripper normalization statistics use only labeled training anchors; joint statistics use all retained training anchors. This filter changes the statistics contract: recompute full training statistics before training. The full stats pass includes the final partial batch and saves sample counts, the source snapshot, and a hash in the statistics manifest.
 
+The commands below use the current run’s single-camera 640×360 video mode and require completed adjacent proxies for the corresponding training and validation videos. See [Optional 640-pixel video derivatives](#optional-640-pixel-video-derivatives).
+
 For an effective global batch of 256 with two-way FSDP, `--gradient-accumulation-steps 32` performs 32 global microbatches of eight (four samples per device) per optimizer update. This reduces activation memory but has not by itself established that a full-size model fits or performs well on a specific H100 allocation. Set `--checkpoint-completed-steps` to label checkpoint directories by completed optimizer updates; the default keeps legacy OpenPI naming.
 
 ```bash
@@ -55,8 +98,10 @@ examples/engram/finetune_pi05.sh stats --batch-size 256 --num-workers 0
 examples/engram/finetune_pi05.sh train my-mixed-engram-run \
   --batch-size 256 --num-train-steps 30000 --save-interval 10000 --keep-period 10000 \
   --fsdp-devices 2 --gradient-accumulation-steps 32 --checkpoint-completed-steps \
+  --data.single-camera --data.video-mode proxy_640 \
   --checkpoint-dir-override /path/to/exact/run/checkpoint/directory
 uv run examples/engram/evaluate_pi05.py --data-root "$ENGRAM_DATA_ROOT" \
+  --single-camera --video-mode proxy_640 \
   --checkpoint-dir /path/to/exact/run/checkpoint/directory/30000
 ```
 
@@ -93,36 +138,3 @@ For production proxies beside originals, use `--data.video-mode proxy_640` witho
 `examples/engram/benchmark_training.py` performs real pretrained π0.5 updates for the subset with completed proxies, using batch 256 on two H100s and saving no checkpoints. Invoke it twice with `--mode original` and `--mode proxy_640`, respectively, using the same seed and other options. Omit `--proxy-root` to compare adjacent proxies on their actual storage. After all training proxies have been created, add `--full-corpus` to sample across the entire training split; the benchmark prints actual per-source episode and anchor counts. The reported loader wait follows each completed GPU step and allows worker prefetch during that step; explicit synchronization makes this diagnostic different from a fully asynchronous end-to-end timing.
 
 `--data.single-camera` is an Engram-only opt-in that removes the two permanently masked wrist-image streams from π0.5's vision and transformer inputs. It does not change the physical state/action data or the statistics. This mode rejects samples that actually provide wrist images; omit the flag to keep the existing three-slot policy interface. The CPU smoke compares losses and gradients against the ordinary masked-wrist path.
-
-### Serve a completed checkpoint
-
-The Engram server uses OpenPI's existing WebSocket policy protocol. It reads a completed checkpoint's parameters, normalization statistics and provenance, and checks the saved statistics hash and strict 640-pixel training contract. A completed checkpoint may be copied to a directory with a nonnumeric name. It does not open the training dataset or require its original mount paths. The server imposes the active run's single-camera configuration; the checkpoint's saved video contract does not itself record that flag. The PaliGemma tokenizer must be available at `$OPENPI_DATA_HOME/big_vision/paligemma_tokenizer.model` (or `~/.cache/openpi/big_vision/paligemma_tokenizer.model` if the variable is unset).
-
-```bash
-uv run examples/engram/serve_pi05.py \
-  --checkpoint-dir /path/to/checkpoint/10000 --host 127.0.0.1 --port 8000 --camera-layout left \
-  --expected-source-manifest-sha256 13b3f4a0df389de3305145449d609cb01f7384656a5305f1e7d20e308ea91eca
-```
-
-The optional source hash shown is for the current 2026-11-01 mixed Engram training run; omit it when deliberately serving another compatible source snapshot. The validated source hash is also exposed in server metadata.
-
-The `--camera-layout` applies to every request: `left` accepts an already-cropped left-eye RGB image; `stereo` selects the left half of a side-by-side stereo RGB image. The selected eye must be 16:9. Images must be HWC `uint8` RGB or floating RGB in `[0, 1]`; the server area-resizes the eye to 640×360, then the unchanged OpenPI pipeline letterboxes it to 224×224. Existing 640×360 left frames are not cropped or rescaled again. Training proxies also underwent YUV conversion and lossy H.264 encoding, so live RGB preprocessing is not bit-identical to those videos.
-
-The state is ordered as **ANKLE, KNEE, BUTTOCK, WAIST, NECK1, NECK2, LEFT_J1–LEFT_J7, RIGHT_J1–RIGHT_J7**, in radians. Supply 20 measured joint positions, or append measured left and right gripper positions in percent `[0, 100]`. A 20D state marks end-effector feedback unavailable. For 22D state, an omitted `action_mask` means both grippers are measured; to use the 22D placeholder layout from the joint-only dataset, supply `action_mask=[True]*20+[False]*2`. Both end-effector mask entries must agree. The server supplies the unavailable marker and masked normalized state; provide the original task prompt without adding that marker yourself. It rejects requests if OpenPI's exact prompt-plus-state token sequence would exceed the model's 200-token limit.
-
-```python
-import numpy as np
-from PIL import Image
-from openpi_client.websocket_client_policy import WebsocketClientPolicy
-
-client = WebsocketClientPolicy(host="127.0.0.1", port=8000)
-observation = {
-    "observation/head_rgbd": np.asarray(Image.open("left_rgb.png").convert("RGB")),
-    "observation/joint_position": np.load("measured_joints_rad.npy"),  # shape (20,)
-    "prompt": "dual gripperopen bread bag and take out bread slice",
-}
-prediction = client.infer(observation)
-print(prediction["actions"].shape, prediction["gripper_available"])  # (64, 20), False
-```
-
-The example prompt is a task string from training; a caller can provide another task instruction. The returned `actions` are **predicted absolute targets** at the nominal 30 Hz, for a 64-step horizon. They contain 20 joints when end-effector feedback is unavailable, or 20 joints plus two absolute gripper percentages when it is available. These are raw, unbounded predictions: values are not clipped, so predicted gripper percentages can fall outside `[0, 100]`. The policy does not infer finger commands from the unlabeled hand videos; do not represent a dexterous hand as two gripper values. This server returns predictions and does not execute robot commands.
