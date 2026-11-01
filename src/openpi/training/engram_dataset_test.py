@@ -11,7 +11,6 @@ import pytest
 from openpi import transforms
 from openpi.models.model import ModelType
 from openpi.policies import engram_policy
-from openpi.policies.astribot_policy import AstribotInputs
 from openpi.policies.engram_policy import ExactJointNoiseCompensation
 from openpi.shared import normalize
 from openpi.training import engram_dataset as engram
@@ -109,9 +108,39 @@ def test_reject_time_gaps(v3_fixture):
         engram.EngramDataset(v3_fixture, 3, decode_images=False)
 
 
+def test_engram_adapter_converts_images_and_removes_action_padding():
+    head = np.stack([np.full((2, 4), value) for value in (-0.1, 0.5, 1.1)])
+    left = np.full((2, 4, 3), 123, dtype=np.uint8)
+    state = np.arange(22, dtype=np.float64)
+    actions = np.arange(64 * 22, dtype=np.float64).reshape(64, 22)
+    data = {
+        "observation/head_rgbd": head,
+        "observation/left_wrist_rgbd": left,
+        "observation/joint_position": state,
+        "actions": actions,
+        "prompt": b"prepare sandwich",
+    }
+    result = engram_policy.EngramInputs(model_type=ModelType.PI05, model_action_dim=32)(data)
+    np.testing.assert_array_equal(result["image"]["base_0_rgb"][0, 0], [0, 127, 255])
+    np.testing.assert_array_equal(result["image"]["left_wrist_0_rgb"], left)
+    assert bool(result["image_mask"]["base_0_rgb"])
+    assert bool(result["image_mask"]["left_wrist_0_rgb"])
+    assert not bool(result["image_mask"]["right_wrist_0_rgb"])
+    assert result["state"].dtype == np.float32
+    assert result["actions"].dtype == np.float32
+    assert result["prompt"] == "prepare sandwich"
+    assert result["action_mask"].shape == (32,)
+    assert result["action_mask"].all()
+
+    padded = np.arange(64 * 32).reshape(64, 32)
+    physical = engram_policy.EngramOutputs()({"actions": padded})["actions"]
+    assert physical.shape == (64, 22)
+    np.testing.assert_array_equal(physical, padded[:, :22])
+
+
 def test_delta_round_trip_and_noise_only_on_joints(v3_fixture):
     data = engram.EngramDataset(v3_fixture, 3, decode_images=False)[0]
-    canonical = AstribotInputs(model_type=ModelType.PI05)(data)
+    canonical = engram_policy.EngramInputs(model_type=ModelType.PI05, model_action_dim=32)(data)
     original_actions = canonical["actions"].copy()
     mask = transforms.make_bool_mask(20, -2)
     delta = transforms.DeltaActions(mask)(canonical)

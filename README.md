@@ -1,323 +1,176 @@
-# openpi
+# Engram Dex W1 π0.5 fine-tuning and inference
 
-openpi holds open-source models and packages for robotics, published by the [Physical Intelligence team](https://www.physicalintelligence.company/).
+The current mixed-data run uses 820 complete episodes: 778 for training and 42 for validation. It trains 20 joint deltas, with gripper supervision only where labels are available. It uses left-camera 640×360 video proxies, a global batch size of 256, and checkpoints every 10,000 steps. See the [mixed-data training recipe](#mixed-end-effector-snapshot-2026-11-01) for details.
 
-Currently, this repo contains three types of models:
-- the [π₀ model](https://www.physicalintelligence.company/blog/pi0), a flow-based vision-language-action model (VLA).
-- the [π₀-FAST model](https://www.physicalintelligence.company/research/fast), an autoregressive VLA, based on the FAST action tokenizer.
-- the [π₀.₅ model](https://www.physicalintelligence.company/blog/pi05), an upgraded version of π₀ with better open-world generalization trained with [knowledge insulation](https://www.physicalintelligence.company/research/knowledge_insulation). Note that, in this repository, we currently only support the flow matching head for both $\pi_{0.5}$ training and inference.
+## Setup
 
-For all models, we provide _base model_ checkpoints, pre-trained on 10k+ hours of robot data, and examples for using them out of the box or fine-tuning them to your own datasets.
-
-This is an experiment: $\pi_0$ was developed for our own robots, which differ from the widely used platforms such as [ALOHA](https://tonyzhaozh.github.io/aloha/) and [DROID](https://droid-dataset.github.io/), and though we are optimistic that researchers and practitioners will be able to run creative new experiments adapting $\pi_0$ to their own platforms, we do not expect every such attempt to be successful. All this is to say: $\pi_0$ may or may not work for you, but you are welcome to try it and see!
-
-## Updates
-
-- [Sept 2025] We released PyTorch support in openpi.
-- [Sept 2025] We released pi05, an upgraded version of pi0 with better open-world generalization.
-- [Sept 2025]: We have added an [improved idle filter](examples/droid/README_train.md#data-filtering) for DROID training.
-- [Jun 2025]: We have added [instructions](examples/droid/README_train.md) for using `openpi` to train VLAs on the full [DROID dataset](https://droid-dataset.github.io/). This is an approximate open-source implementation of the training pipeline used to train pi0-FAST-DROID. 
-
-
-## Requirements
-
-To run the models in this repository, you will need an NVIDIA GPU with at least the following specifications. These estimations assume a single GPU, but you can also use multiple GPUs with model parallelism to reduce per-GPU memory requirements by configuring `fsdp_devices` in the training config. Please also note that the current training script does not yet support multi-node training.
-
-| Mode               | Memory Required | Example GPU        |
-| ------------------ | --------------- | ------------------ |
-| Inference          | > 8 GB          | RTX 4090           |
-| Fine-Tuning (LoRA) | > 22.5 GB       | RTX 4090           |
-| Fine-Tuning (Full) | > 70 GB         | A100 (80GB) / H100 |
-
-The repo has been tested with Ubuntu 22.04, we do not currently support other operating systems.
-
-## Installation
-
-When cloning this repo, make sure to update submodules:
+This branch builds on [OpenPI](https://github.com/Physical-Intelligence/openpi) and uses `uv` with its committed lockfile. From a machine with access to the repository:
 
 ```bash
-git clone --recurse-submodules git@github.com:Physical-Intelligence/openpi.git
-
-# Or if you already cloned the repo:
-git submodule update --init --recursive
-```
-
-We use [uv](https://docs.astral.sh/uv/) to manage Python dependencies. See the [uv installation instructions](https://docs.astral.sh/uv/getting-started/installation/) to set it up. Once uv is installed, run the following to set up the environment:
-
-```bash
+git clone --branch engram-finetuning git@github.com:Franklin-Zhang0/pi05-astribot.git engram-pi05
+cd engram-pi05
 GIT_LFS_SKIP_SMUDGE=1 uv sync
-GIT_LFS_SKIP_SMUDGE=1 uv pip install -e .
 ```
 
-NOTE: `GIT_LFS_SKIP_SMUDGE=1` is needed to pull LeRobot as a dependency.
+Training requires the π0.5 base checkpoint, the selected Engram data, and suitable GPU resources. The current recipe was configured for two H100 GPUs. The default base checkpoint is `gs://openpi-assets/checkpoints/pi05_base/params`; an existing OpenPI cache can also be used. Serving requires the PaliGemma tokenizer in the OpenPI cache and a completed Engram checkpoint. Video preprocessing requires FFmpeg and its probing tools. CPU tests use small diagnostic models and do not establish trained-policy quality.
 
-**Docker**: As an alternative to uv installation, we provide instructions for installing openpi using Docker. If you encounter issues with your system setup, consider using Docker to simplify installation. See [Docker Setup](docs/docker.md) for more details.
+## Action split and horizon
 
+The physical action uses the same zero-based ordering as the measured input state:
 
+| Indices | Dimensions | Body part | Channels |
+| --- | ---: | --- | --- |
+| 0–3 | 4 | Body | `ANKLE`, `KNEE`, `BUTTOCK`, `WAIST` |
+| 4–5 | 2 | Neck | `NECK1`, `NECK2` |
+| 6–12 | 7 | Left arm | `LEFT_J1`–`LEFT_J7` |
+| 13–19 | 7 | Right arm | `RIGHT_J1`–`RIGHT_J7` |
+| 20 | 1 | Left gripper | Absolute position in percent, when available |
+| 21 | 1 | Right gripper | Absolute position in percent, when available |
 
+The first 20 channels are joint positions in radians. Before noise augmentation and normalization, the training target at each step `h` is `joint_command[t+h] - measured_joint_position[t]`; all 64 steps use the **same current observation** as their reference. Gripper targets are absolute positions in percent and are supervised only when their labels are present. Joint noise augmentation compensates the joint delta so that it preserves the original absolute target.
 
-## Model Checkpoints
+OpenPI pads the 22 physical slots with 10 zero-valued dimensions at indices 22–31 for the model's 32-dimensional action head. These padding dimensions are not robot actions and are removed from the served result. When gripper feedback is unavailable, the two gripper slots are masked during training and omitted from the server response; the hand-only exports do not provide finger-action labels.
 
-### Base Models
-We provide multiple base VLA model checkpoints. These checkpoints have been pre-trained on 10k+ hours of robot data, and can be used for fine-tuning.
+The server unnormalizes the predictions and adds the current measured joint positions back to the joint deltas. Thus, `prediction["actions"]` contains **absolute** targets over a 64-step horizon at nominal 30 Hz:
 
-| Model        | Use Case    | Description                                                                                                 | Checkpoint Path                                |
-| ------------ | ----------- | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| $\pi_0$      | Fine-Tuning | Base [π₀ model](https://www.physicalintelligence.company/blog/pi0) for fine-tuning                | `gs://openpi-assets/checkpoints/pi0_base`      |
-| $\pi_0$-FAST | Fine-Tuning | Base autoregressive [π₀-FAST model](https://www.physicalintelligence.company/research/fast) for fine-tuning | `gs://openpi-assets/checkpoints/pi0_fast_base` |
-| $\pi_{0.5}$    | Fine-Tuning | Base [π₀.₅ model](https://www.physicalintelligence.company/blog/pi05) for fine-tuning    | `gs://openpi-assets/checkpoints/pi05_base`      |
+- Shape `(64, 22)` when both grippers are available: `[:, :20]` contains joint targets, `[:, 20]` the left gripper, and `[:, 21]` the right gripper.
+- Shape `(64, 20)` when gripper feedback is unavailable: `[:, :20]` contains the joint targets and there are no gripper columns.
 
-### Fine-Tuned Models
-We also provide "expert" checkpoints for various robot platforms and tasks. These models are fine-tuned from the base models above and intended to run directly on the target robot. These may or may not work on your particular robot. Since these checkpoints were fine-tuned on relatively small datasets collected with more widely available robots, such as ALOHA and the DROID Franka setup, they might not generalize to your particular setup, though we found some of these, especially the DROID checkpoint, to generalize quite broadly in practice.
+The server returns raw predictions without clipping; the 20 joint outputs are radians and gripper outputs are percentages. It does not execute the targets.
 
-| Model                    | Use Case    | Description                                                                                                                                                                                              | Checkpoint Path                                       |
-| ------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| $\pi_0$-FAST-DROID       | Inference   | $\pi_0$-FAST model fine-tuned on the [DROID dataset](https://droid-dataset.github.io/): can perform a wide range of simple table-top manipulation tasks 0-shot in new scenes on the DROID robot platform | `gs://openpi-assets/checkpoints/pi0_fast_droid`       |
-| $\pi_0$-DROID            | Fine-Tuning | $\pi_0$ model fine-tuned on the [DROID dataset](https://droid-dataset.github.io/): faster inference than $\pi_0$-FAST-DROID, but may not follow language commands as well                                | `gs://openpi-assets/checkpoints/pi0_droid`            |
-| $\pi_0$-ALOHA-towel      | Inference   | $\pi_0$ model fine-tuned on internal [ALOHA](https://tonyzhaozh.github.io/aloha/) data: can fold diverse towels 0-shot on ALOHA robot platforms                                                          | `gs://openpi-assets/checkpoints/pi0_aloha_towel`      |
-| $\pi_0$-ALOHA-tupperware | Inference   | $\pi_0$ model fine-tuned on internal [ALOHA](https://tonyzhaozh.github.io/aloha/) data: can unpack food from a tupperware container                                                                                                             | `gs://openpi-assets/checkpoints/pi0_aloha_tupperware` |
-| $\pi_0$-ALOHA-pen-uncap  | Inference   | $\pi_0$ model fine-tuned on public [ALOHA](https://dit-policy.github.io/) data: can uncap a pen                                                                                                          | `gs://openpi-assets/checkpoints/pi0_aloha_pen_uncap`  |
-| $\pi_{0.5}$-LIBERO      | Inference   | $\pi_{0.5}$ model fine-tuned for the [LIBERO](https://libero-project.github.io/datasets) benchmark: gets state-of-the-art performance (see [LIBERO README](examples/libero/README.md)) | `gs://openpi-assets/checkpoints/pi05_libero`      |
-| $\pi_{0.5}$-DROID      | Inference / Fine-Tuning | $\pi_{0.5}$ model fine-tuned on the [DROID dataset](https://droid-dataset.github.io/) with [knowledge insulation](https://www.physicalintelligence.company/research/knowledge_insulation): fast inference and good language-following | `gs://openpi-assets/checkpoints/pi05_droid`      |
+## Serve a completed checkpoint
 
+The Engram server uses OpenPI's existing WebSocket policy protocol. It reads a completed checkpoint's parameters, normalization statistics and provenance, and checks the saved statistics hash and strict 640-pixel training contract. A completed checkpoint may be copied to a directory with a nonnumeric name. It does not open the training dataset or require its original mount paths. The server imposes the active run's single-camera configuration; the checkpoint's saved video contract does not itself record that flag. The PaliGemma tokenizer must be available at `$OPENPI_DATA_HOME/big_vision/paligemma_tokenizer.model` (or `~/.cache/openpi/big_vision/paligemma_tokenizer.model` if the variable is unset).
 
-By default, checkpoints are automatically downloaded from `gs://openpi-assets` and are cached in `~/.cache/openpi` when needed. You can overwrite the download path by setting the `OPENPI_DATA_HOME` environment variable.
+From the repository root, after the 10,000-step checkpoint has completed:
 
+```bash
+export OPENPI_DATA_HOME=/path/to/openpi_cache  # contains big_vision/paligemma_tokenizer.model
+uv run examples/engram/serve_pi05.py \
+  --checkpoint-dir /hand_keypoint_data/engram_data/ckpt/pi05/20261101_engram_pi05_strict_640g4_b256_2h100/10000 \
+  --host 127.0.0.1 --port 8000 --camera-layout left \
+  --expected-source-manifest-sha256 13b3f4a0df389de3305145449d609cb01f7384656a5305f1e7d20e308ea91eca
+```
 
+The optional source hash shown is for the current 2026-11-01 mixed Engram training run; omit it when deliberately serving another compatible source snapshot. The validated source hash is also exposed in server metadata.
 
+The `--camera-layout` applies to every request: `left` accepts an already-cropped left-eye RGB image; `stereo` selects the left half of a side-by-side stereo RGB image. The selected eye must be 16:9. Images must be HWC `uint8` RGB or floating RGB in `[0, 1]`; the server area-resizes the eye to 640×360, then the unchanged OpenPI pipeline letterboxes it to 224×224. Existing 640×360 left frames are not cropped or rescaled again. Training proxies also underwent YUV conversion and lossy H.264 encoding, so live RGB preprocessing is not bit-identical to those videos.
 
-## Running Inference for a Pre-Trained Model
+The state is ordered as **ANKLE, KNEE, BUTTOCK, WAIST, NECK1, NECK2, LEFT_J1–LEFT_J7, RIGHT_J1–RIGHT_J7**, in radians. Supply 20 measured joint positions, or append measured left and right gripper positions in percent `[0, 100]`. A 20D state marks end-effector feedback unavailable. For 22D state, an omitted `action_mask` means both grippers are measured; to use the 22D placeholder layout from the joint-only dataset, supply `action_mask=[True]*20+[False]*2`. Both end-effector mask entries must agree. The server supplies the unavailable marker and masked normalized state; provide the original task prompt without adding that marker yourself. It rejects requests if OpenPI's exact prompt-plus-state token sequence would exceed the model's 200-token limit.
 
-Our pre-trained model checkpoints can be run with a few lines of code (here our $\pi_0$-FAST-DROID model):
 ```python
-from openpi.training import config as _config
-from openpi.policies import policy_config
-from openpi.shared import download
+import numpy as np
+from PIL import Image
+from openpi_client.websocket_client_policy import WebsocketClientPolicy
 
-config = _config.get_config("pi05_droid")
-checkpoint_dir = download.maybe_download("gs://openpi-assets/checkpoints/pi05_droid")
-
-# Create a trained policy.
-policy = policy_config.create_trained_policy(config, checkpoint_dir)
-
-# Run inference on a dummy example.
-example = {
-    "observation/exterior_image_1_left": ...,
-    "observation/wrist_image_left": ...,
-    ...
-    "prompt": "pick up the fork"
+client = WebsocketClientPolicy(host="127.0.0.1", port=8000)
+observation = {
+    "observation/head_rgbd": np.asarray(Image.open("left_rgb.png").convert("RGB")),
+    "observation/joint_position": np.load("measured_joints_rad.npy"),  # shape (20,)
+    "prompt": "dual gripperopen bread bag and take out bread slice",
 }
-action_chunk = policy.infer(example)["actions"]
+prediction = client.infer(observation)
+print(prediction["actions"].shape, prediction["gripper_available"])  # (64, 20), False
 ```
-You can also test this out in the [example notebook](examples/inference.ipynb).
 
-We provide detailed step-by-step examples for running inference of our pre-trained checkpoints on [DROID](examples/droid/README.md) and [ALOHA](examples/aloha_real/README.md) robots.
+The example prompt is a task string from training; a caller can provide another task instruction. The returned `actions` are **predicted absolute targets** at the nominal 30 Hz, for a 64-step horizon. They contain 20 joints when end-effector feedback is unavailable, or 20 joints plus two absolute gripper percentages when it is available. These are raw, unbounded predictions: values are not clipped, so predicted gripper percentages can fall outside `[0, 100]`. The policy does not infer finger commands from the unlabeled hand videos; do not represent a dexterous hand as two gripper values. This server returns predictions and does not execute robot commands.
 
-**Remote Inference**: We provide [examples and code](docs/remote_inference.md) for running inference of our models **remotely**: the model can run on a different server and stream actions to the robot via a websocket connection. This makes it easy to use more powerful GPUs off-robot and keep robot and policy environments separate.
+## Mixed-end-effector snapshot, 2026-11-01
 
-**Test inference without a robot**: We provide a [script](examples/simple_client/README.md) for testing inference without a robot. This script will generate a random observation and run inference with the model. See [here](examples/simple_client/README.md) for more details.
+The pinned [multi-source manifest](examples/engram/kitchen_new_20261101.json) combines the original 450 fully labeled gripper episodes with 110 `st026` and 260 `st031` full, successful episodes. `st026` uses grippers and `st031` shows dexterous hands; neither new export records any end-effector feedback or commands. The previous 113-episode incomplete source and partial fragments stay excluded. The validation split preserves the original 23 held-out episodes and adds 19 from the new sources, for 778 training and 42 validation episodes. Package IDs are held out across all sources, and duplicate annotations, ambiguous mappings, missing packages, unexpected schema changes and episode counts fail closed.
 
+All sources supervise the same 20 joint deltas. For the 370 episodes without end-effector annotations, a prompt marker explicitly says `End-effector state unavailable`, neutral normalized state tokens occupy the two unavailable gripper slots, and their flow inputs are pure noise and their output loss is masked. No finger labels are invented. For these joint-only episodes, the training filter drops chunks when all joint target movements across the horizon are below 0.01 rad. Their end-effector activity is unobserved, so this can also drop gripper-only or finger-only activity. Labeled gripper episodes keep the original joint-or-gripper motion pruning rule. Gripper normalization statistics use only labeled training anchors; joint statistics use all retained training anchors. This filter changes the statistics contract: recompute full training statistics before training. The full stats pass includes the final partial batch and saves sample counts, the source snapshot, and a hash in the statistics manifest.
 
+The commands below use the current run’s single-camera 640×360 video mode and require completed adjacent proxies for the corresponding training and validation videos. See [Optional 640-pixel video derivatives](#optional-640-pixel-video-derivatives).
 
-
-
-## Fine-Tuning Base Models on Your Own Data
-
-We will fine-tune the $\pi_{0.5}$ model on the [LIBERO dataset](https://libero-project.github.io/datasets) as a running example for how to fine-tune a base model on your own data. We will explain three steps:
-1. Convert your data to a LeRobot dataset (which we use for training)
-2. Defining training configs and running training
-3. Spinning up a policy server and running inference
-
-### 1. Convert your data to a LeRobot dataset
-
-We provide a minimal example script for converting LIBERO data to a LeRobot dataset in [`examples/libero/convert_libero_data_to_lerobot.py`](examples/libero/convert_libero_data_to_lerobot.py). You can easily modify it to convert your own data! You can download the raw LIBERO dataset from [here](https://huggingface.co/datasets/openvla/modified_libero_rlds), and run the script with:
+For an effective global batch of 256 with two-way FSDP, `--gradient-accumulation-steps 32` performs 32 global microbatches of eight (four samples per device) per optimizer update. This reduces activation memory but has not by itself established that a full-size model fits or performs well on a specific H100 allocation. Set `--checkpoint-completed-steps` to label checkpoint directories by completed optimizer updates; the default keeps legacy OpenPI naming.
 
 ```bash
-uv run examples/libero/convert_libero_data_to_lerobot.py --data_dir /path/to/your/libero/data
+export ENGRAM_DATA_ROOT="$PWD/examples/engram/kitchen_new_20261101.json"
+export ENGRAM_ASSETS_DIR=/path/to/run/assets
+examples/engram/finetune_pi05.sh stats --batch-size 256 --num-workers 0
+examples/engram/finetune_pi05.sh train my-mixed-engram-run \
+  --batch-size 256 --num-train-steps 30000 --save-interval 10000 --keep-period 10000 \
+  --fsdp-devices 2 --gradient-accumulation-steps 32 --checkpoint-completed-steps \
+  --data.single-camera --data.video-mode proxy_640 \
+  --checkpoint-dir-override /path/to/exact/run/checkpoint/directory
+uv run examples/engram/evaluate_pi05.py --data-root "$ENGRAM_DATA_ROOT" \
+  --single-camera --video-mode proxy_640 \
+  --checkpoint-dir /path/to/exact/run/checkpoint/directory/30000
 ```
 
-**Note:** If you just want to fine-tune on LIBERO, you can skip this step, because our LIBERO fine-tuning configs point to a pre-converted LIBERO dataset. This step is merely an example that you can adapt to your own data.
+The held-out evaluator reports joint errors across all chosen samples and gripper errors only for samples with actual gripper labels. The mixed policy does not acquire direct finger-control supervision from the hand videos.
 
-### 2. Defining training configs and running training
+To match a single-camera 640-pixel proxy training run, prepare timestamp-validated proxies and sidecars for the **validation** videos as well, then pass `--single-camera --video-mode proxy_640` to the evaluator. By default it reads adjacent `*_640.mp4` files; add `--proxy-root /path/to/proxies` for derivatives stored separately. Missing or incompatible validation proxies fail closed. Without these options the evaluator retains its original-video input and three image slots with absent wrist cameras masked. The reported result records video mode, proxy identity, camera mode and checkpoint normalization hashes; checkpoint training statistics are used without training-time observation augmentation.
 
-To fine-tune a base model on your own data, you need to define configs for data processing and training. We provide example configs with detailed comments for LIBERO below, which you can modify for your own dataset:
+### Optional 640-pixel video derivatives
 
-- [`LiberoInputs` and `LiberoOutputs`](src/openpi/policies/libero_policy.py): Defines the data mapping from the LIBERO environment to the model and vice versa. Will be used for both, training and inference.
-- [`LeRobotLiberoDataConfig`](src/openpi/training/config.py): Defines how to process raw LIBERO data from LeRobot dataset for training.
-- [`TrainConfig`](src/openpi/training/config.py): Defines fine-tuning hyperparameters, data config, and weight loader.
+`examples/engram/preprocess_640.py` creates opt-in `*_640.mp4` videos from the left eye of each selected full-success training recording. The 1920×1080 eye is area-resized to 640×360 without padding. Full-range H.264 CRF 18 with a maximum four-frame GOP is lossy: model inputs change slightly. Every derivative is validated against **every original presentation timestamp**, the per-episode annotated timestamps (100 µs tolerance), frame count, full-range metadata, and GOP length before publication. Each has a JSON sidecar containing source and proxy SHA-256. Encoding and MP4 faststart occur in local scratch; publication is exclusive and the sidecar is written last. Completed outputs are reused only after hash verification. An interrupted/orphan output is never overwritten automatically.
 
-We provide example fine-tuning configs for [π₀](src/openpi/training/config.py), [π₀-FAST](src/openpi/training/config.py), and [π₀.₅](src/openpi/training/config.py) on LIBERO data.
+Default encoding uses CPU FFmpeg/libx264. `--decoder nvdec --cuda-device 0` explicitly requires CUDA decoding with no software fallback; PyAV transfers decoded frames to host memory, so crop/scale and libx264 encoding remain CPU operations. Inspect CPU-vs-GPU RGB/color-range results with `probe_video_decode.py` before using NVDEC. The source streams must be full range, and the decoder restores that metadata after CUDA transfer.
 
-Before we can run training, we need to compute the normalization statistics for the training data. Run the script below with the name of your training config:
+For a bounded concurrency trial, pass `--cuda-devices 0,1 --workers 4 --workers-per-gpu 2`, or use `--workers 8 --workers-per-gpu 4`. Videos are assigned round-robin, and the per-device limit defaults to one and cannot exceed eight. Each process still encodes on CPU, so benchmark throughput and CPU pressure before scaling up.
 
 ```bash
-uv run scripts/compute_norm_stats.py --config-name pi05_libero
+# Test one complete train video from each source without changing source data.
+uv run examples/engram/preprocess_640.py examples/engram/kitchen_new_20261101.json \
+  --output-root /tmp/engram-proxies --scratch-root /tmp/engram-encoding \
+  --split train --limit-per-source 1 --shortest-first --workers 2
+
+# After qualification, --adjacent replaces --output-root and writes *_640.mp4
+# beside the original recordings. Omit --limit-per-source for all 778 train videos.
+
+# Use the exact same completed-proxy episodes/anchors to compare loader/trainer speed:
+examples/engram/finetune_pi05.sh train proxy-smoke --data.video-mode proxy_640 \
+  --data.proxy-root /tmp/engram-proxies --data.proxy-subset-only
+examples/engram/finetune_pi05.sh train original-smoke --data.video-mode original \
+  --data.proxy-root /tmp/engram-proxies --data.proxy-subset-only
 ```
 
-Now we can kick off training with the following command (the `--overwrite` flag is used to overwrite existing checkpoints if you rerun fine-tuning with the same config):
+For production proxies beside originals, use `--data.video-mode proxy_640` without `--data.proxy-root` or `--data.proxy-subset-only`. The reader verifies sidecar format, source size, proxy SHA-256 and episode mapping, and never silently falls back to original video. It reads the left-view derivatives directly, without cropping them a second time. The source SHA-256 is verified on builder reuse; the reader checks source size and trusted sidecar identity, rather than rehashing every 4K source at each startup. Checkpoint assets pin the selected proxy identities and prevent resume with a different video mode or profiling subset. Validation videos are not built by the default train-only pass; use the default original-video mode for evaluation, or explicitly preprocess the validation split.
+
+`examples/engram/benchmark_training.py` performs real pretrained π0.5 updates for the subset with completed proxies, using batch 256 on two H100s and saving no checkpoints. Invoke it twice with `--mode original` and `--mode proxy_640`, respectively, using the same seed and other options. Omit `--proxy-root` to compare adjacent proxies on their actual storage. After all training proxies have been created, add `--full-corpus` to sample across the entire training split; the benchmark prints actual per-source episode and anchor counts. The reported loader wait follows each completed GPU step and allows worker prefetch during that step; explicit synchronization makes this diagnostic different from a fully asynchronous end-to-end timing.
+
+`--data.single-camera` is an Engram-only opt-in that removes the two permanently masked wrist-image streams from π0.5's vision and transformer inputs. It does not change the physical state/action data or the statistics. This mode rejects samples that actually provide wrist images; omit the flag to keep the existing three-slot policy interface. The CPU smoke compares losses and gradients against the ordinary masked-wrist path.
+
+## Original single-export recipe
+
+This recipe starts from `pi05_base`, uses a 64-step action horizon, and trains on the full successful episodes of the gripper-equipped export. The source dataset is read-only; the 113-episode export without gripper commands and partial fragments are not included. It uses the OpenPI-pinned LeRobot v2 environment with a local v3 reader rather than attempting to open v3 metadata with the v2 loader.
+
+For implementation background, see the [upstream OpenPI training configuration](https://github.com/Physical-Intelligence/openpi/blob/main/src/openpi/training/config.py) and [LeRobot v3 format documentation](https://huggingface.co/docs/lerobot/lerobot-dataset-v3). This OpenPI repository is distributed under its [Apache-2.0 license](LICENSE).
+
+The default split holds out entire source recording packages. The train split has 427 episodes, and the validation split has 23 episodes (5.1% of 450). The selected package IDs, shared with the UVA recipe, are `5af748f3-6e02-4506-9938-90bb165c0953` and `07bc4327-6a40-42f0-8a30-35168b9d73b2`; they were selected deterministically by SHA-256 ranking within the two main task types. The loader checks the parent `export_plan.json` and fails on missing or ambiguous package mappings. `ENGRAM_SPLIT=all` is available for an explicitly chosen all-data run; it has a separate normalization namespace.
+
+Each state/action is ordered as `[20 body/head/arm joints, left gripper, right gripper]`. The joint values are radians, grippers are percentages. The measured state uses joint feedback and gripper feedback. Targets use joint position commands and gripper position commands; non-position gripper modes and invalid action values are rejected. Joint targets are converted to deltas from the current joint state; gripper targets remain absolute. OpenPI pads the 22 physical dimensions to the pretrained model's native action dimension of 32. Proprioceptive noise uses `std=0.001`; compensation is exact, so noisy state plus noisy delta reconstructs the original joint target. Gripper channels are unaffected. The inverse restores absolute joint targets and leaves grippers absolute.
+
+For this original recipe, the observation is the full left 1920×1080 half of the side-by-side `kfc_compressed` video, letterboxed by OpenPI to 224×224. The other camera slots are masked. Video is decoded on demand at the anchor's actual timestamp using bounded keyframe seeking and must match the row timestamp within 100 μs. For each anchor, the 64 actions are selected nearest to times `t + k/30 s`, using source timestamps. Episodes with gaps greater than 250 ms are rejected, and anchors without a complete future horizon are excluded because the model loss does not consume a padding mask. A missing or invalid gripper feedback value excludes that observation anchor but does not remove its otherwise valid action from neighboring horizons.
+
+For labeled gripper episodes, the training split excludes an anchor only when **all** 20 joint targets across its entire future horizon differ from the current joint state by less than 0.01 rad **and** all gripper targets equal their current measured gripper positions. This keeps gripper-only chunks as well as any chunk with later meaningful joint motion; retained samples supervise both grippers. Validation does not apply the static filter. Set `ENGRAM_PRUNE_THRESHOLD_RAD=0` for an explicitly chosen unfiltered training run, or set `ENGRAM_GRIPPER_THRESHOLD_PERCENT` to a positive deadband if desired; recompute statistics after changing either setting.
+
+Fit quantile statistics on the selected, filtered training split before training. Fitting skips video decoding but uses the same timing, delta conversion and noise transform as training. Minimum full quantile spans are 0.1 rad for each joint and 5 percentage points for each gripper, avoiding severe amplification of nearly constant axes; values are not clipped. Saved adjusted quantiles make the normal OpenPI inverse consistent. The stats manifest binds the stats to the source metadata, split, horizon and pruning threshold. It is not a checksum of every video or data file.
 
 ```bash
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero --exp-name=my_experiment --overwrite
+# Optional: use durable local storage for training artifacts.
+export ENGRAM_ASSETS_DIR=/path/to/assets
+export ENGRAM_CHECKPOINTS_DIR=/path/to/checkpoints
+
+# Default: complete TRAIN split, no source-data writes.
+examples/engram/finetune_pi05.sh stats
+examples/engram/finetune_pi05.sh train my-engram-run --fsdp-devices 8
+
+# Offline held-out action error; uses the training stats saved in the checkpoint.
+uv run examples/engram/evaluate_pi05.py --checkpoint-dir /path/to/checkpoint/20000 --max-samples 256
 ```
 
-The command will log training progress to the console and save checkpoints to the `checkpoints` directory. You can also monitor training progress on the Weights & Biases dashboard. For maximally using the GPU memory, set `XLA_PYTHON_CLIENT_MEM_FRACTION=0.9` before running training -- this enables JAX to use up to 90% of the GPU memory (vs. the default of 75%).
+Use a new experiment name to avoid overwriting a run. Training requires the π0.5 base checkpoint at `gs://openpi-assets/checkpoints/pi05_base/params` (or an existing OpenPI cache), and suitable GPU resources. Set `ENGRAM_DATA_ROOT` to relocate the same export; its parent directory must contain `export_plan.json` for the default package split. The split and both thresholds must match between stats and training. For a bounded diagnostic stats pass, append `--max-frames 1024 --batch-size 8 --num-workers 0` to the `stats` command and use a separate assets directory: sampled stats are a smoke test, not the full training statistics. Evaluation reports offline action RMSE in radians and gripper percentage points; it is not a robot rollout or success-rate evaluation.
 
-**Note:** We provide functionality for *reloading* normalization statistics for state / action normalization from pre-training. This can be beneficial if you are fine-tuning to a new task on a robot that was part of our pre-training mixture. For more details on how to reload normalization statistics, see the [norm_stats.md](docs/norm_stats.md) file.
+The default recipe is 20,001 steps, batch size 64, 10,000-step checkpoint retention, and one FSDP device; choose a matching `--fsdp-devices` for the actual single-node allocation. This repository's normal `scripts/train.py` and `scripts/compute_norm_stats.py` entrypoints also support the config directly. CPU tests exercise the data and transformation paths with a small diagnostic model; they do not establish full-checkpoint GPU training or policy quality.
 
-### 3. Spinning up a policy server and running inference
-
-Once training is complete, we can run inference by spinning up a policy server and then querying it from a LIBERO evaluation script. Launching a model server is easy (we use the checkpoint for iteration 20,000 for this example, modify as needed):
+For a reproducible CPU optimizer smoke, first compute sampled stats in an isolated directory, then run the diagnostic random-weight model:
 
 ```bash
-uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi05_libero --policy.dir=checkpoints/pi05_libero/my_experiment/20000
+ENGRAM_ASSETS_DIR=/tmp/engram-pi-smoke examples/engram/finetune_pi05.sh stats --max-frames 8 --batch-size 4 --num-workers 0
+JAX_PLATFORM_NAME=cpu uv run examples/engram/smoke_cpu.py --assets-base-dir /tmp/engram-pi-smoke
 ```
 
-This will spin up a server that listens on port 8000 and waits for observations to be sent to it. We can then run an evaluation script (or robot runtime) that queries the server.
-
-For running the LIBERO eval in particular, we provide (and recommend using) a Dockerized workflow that handles both the policy server and the evaluation script together. See the [LIBERO README](examples/libero/README.md) for more details.
-
-If you want to embed a policy server call in your own robot runtime, we have a minimal example of how to do so in the [remote inference docs](docs/remote_inference.md).
-
-
-
-### More Examples
-
-We provide more examples for how to fine-tune and run inference with our models on the ALOHA platform in the following READMEs:
-- [ALOHA Simulator](examples/aloha_sim)
-- [ALOHA Real](examples/aloha_real)
-- [UR5](examples/ur5)
-
-## PyTorch Support
-
-openpi now provides PyTorch implementations of π₀ and π₀.₅ models alongside the original JAX versions! The PyTorch implementation has been validated on the LIBERO benchmark (both inference and finetuning). A few features are currently not supported (this may change in the future):
-
-- The π₀-FAST model
-- Mixed precision training
-- FSDP (fully-sharded data parallelism) training
-- LoRA (low-rank adaptation) training
-- EMA (exponential moving average) weights during training
-
-### Setup
-1. Make sure that you have the latest version of all dependencies installed: `uv sync`
-
-2. Double check that you have transformers 4.53.2 installed: `uv pip show transformers`
-
-3. Apply the transformers library patches:
-   ```bash
-   cp -r ./src/openpi/models_pytorch/transformers_replace/* .venv/lib/python3.11/site-packages/transformers/
-   ```
-
-This overwrites several files in the transformers library with necessary model changes: 1) supporting AdaRMS, 2) correctly controlling the precision of activations, and 3) allowing the KV cache to be used without being updated.
-
-**WARNING**: With the default uv link mode (hardlink), this will permanently affect the transformers library in your uv cache, meaning the changes will survive reinstallations of transformers and could even propagate to other projects that use transformers. To fully undo this operation, you must run `uv cache clean transformers`.
-
-### Converting JAX Models to PyTorch
-
-To convert a JAX model checkpoint to PyTorch format:
-
-```bash
-uv run examples/convert_jax_model_to_pytorch.py \
-    --checkpoint_dir /path/to/jax/checkpoint \
-    --config_name <config name> \
-    --output_path /path/to/converted/pytorch/checkpoint
-```
-
-### Running Inference with PyTorch
-
-The PyTorch implementation uses the same API as the JAX version - you only need to change the checkpoint path to point to the converted PyTorch model:
-
-```python
-from openpi.training import config as _config
-from openpi.policies import policy_config
-from openpi.shared import download
-
-config = _config.get_config("pi05_droid")
-checkpoint_dir = "/path/to/converted/pytorch/checkpoint"
-
-# Create a trained policy (automatically detects PyTorch format)
-policy = policy_config.create_trained_policy(config, checkpoint_dir)
-
-# Run inference (same API as JAX)
-action_chunk = policy.infer(example)["actions"]
-```
-
-### Policy Server with PyTorch
-
-The policy server works identically with PyTorch models - just point to the converted checkpoint directory:
-
-```bash
-uv run scripts/serve_policy.py policy:checkpoint \
-    --policy.config=pi05_droid \
-    --policy.dir=/path/to/converted/pytorch/checkpoint
-```
-
-### Finetuning with PyTorch
-
-To finetune a model in PyTorch:
-
-1. Convert the JAX base model to PyTorch format:
-   ```bash
-   uv run examples/convert_jax_model_to_pytorch.py \
-       --config_name <config name> \
-       --checkpoint_dir /path/to/jax/base/model \
-       --output_path /path/to/pytorch/base/model
-   ```
-
-2. Specify the converted PyTorch model path in your config using `pytorch_weight_path`
-
-3. Launch training using one of these modes:
-
-```bash
-# Single GPU training:
-uv run scripts/train_pytorch.py <config_name> --exp_name <run_name> --save_interval <interval>
-
-# Example:
-uv run scripts/train_pytorch.py debug --exp_name pytorch_test
-uv run scripts/train_pytorch.py debug --exp_name pytorch_test --resume  # Resume from latest checkpoint
-
-# Multi-GPU training (single node):
-uv run torchrun --standalone --nnodes=1 --nproc_per_node=<num_gpus> scripts/train_pytorch.py <config_name> --exp_name <run_name>
-
-# Example:
-uv run torchrun --standalone --nnodes=1 --nproc_per_node=2 scripts/train_pytorch.py pi0_aloha_sim --exp_name pytorch_ddp_test
-uv run torchrun --standalone --nnodes=1 --nproc_per_node=2 scripts/train_pytorch.py pi0_aloha_sim --exp_name pytorch_ddp_test --resume
-
-# Multi-Node Training:
-uv run torchrun \
-    --nnodes=<num_nodes> \
-    --nproc_per_node=<gpus_per_node> \
-    --node_rank=<rank_of_node> \
-    --master_addr=<master_ip> \
-    --master_port=<port> \
-    scripts/train_pytorch.py <config_name> --exp_name=<run_name> --save_interval <interval>
-```
-
-### Precision Settings
-
-JAX and PyTorch implementations handle precision as follows:
-
-**JAX:**
-1. Inference: most weights and computations in bfloat16, with a few computations in float32 for stability
-2. Training: defaults to mixed precision: weights and gradients in float32, (most) activations and computations in bfloat16. You can change to full float32 training by setting `dtype` to float32 in the config.
-
-**PyTorch:**
-1. Inference: matches JAX -- most weights and computations in bfloat16, with a few weights converted to float32 for stability
-2. Training: supports either full bfloat16 (default) or full float32. You can change it by setting `pytorch_training_precision` in the config. bfloat16 uses less memory but exhibits higher losses compared to float32. Mixed precision is not yet supported.
-
-With torch.compile, inference speed is comparable between JAX and PyTorch.
-
-## Troubleshooting
-
-We will collect common issues and their solutions here. If you encounter an issue, please check here first. If you can't find a solution, please file an issue on the repo (see [here](CONTRIBUTING.md) for guidelines).
-
-| Issue                                     | Resolution                                                                                                                                                                                   |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `uv sync` fails with dependency conflicts | Try removing the virtual environment directory (`rm -rf .venv`) and running `uv sync` again. If issues persist, check that you have the latest version of `uv` installed (`uv self update`). |
-| Training runs out of GPU memory           | Make sure you set `XLA_PYTHON_CLIENT_MEM_FRACTION=0.9` (or higher) before running training to allow JAX to use more GPU memory. You can also use `--fsdp-devices <n>` where `<n>` is your number of GPUs, to enable [fully-sharded data parallelism](https://engineering.fb.com/2021/07/15/open-source/fsdp/), which reduces memory usage in exchange for slower training (the amount of slowdown depends on your particular setup). If you are still running out of memory, you may want to consider disabling EMA.        |
-| Policy server connection errors           | Check that the server is running and listening on the expected port. Verify network connectivity and firewall settings between client and server.                                            |
-| Missing norm stats error when training    | Run `scripts/compute_norm_stats.py` with your config name before starting training.                                                                                                          |
-| Dataset download fails                    | Check your internet connection. For HuggingFace datasets, ensure you're logged in (`huggingface-cli login`).                                                                                 |
-| CUDA/GPU errors                           | Verify NVIDIA drivers are installed correctly. For Docker, ensure nvidia-container-toolkit is installed. Check GPU compatibility. You do NOT need CUDA libraries installed at a system level --- they will be installed via uv. You may even want to try *uninstalling* system CUDA libraries if you run into CUDA issues, since system libraries can sometimes cause conflicts. |
-| Import errors when running examples       | Make sure you've installed all dependencies with `uv sync`. Some examples may have additional requirements listed in their READMEs.                    |
-| Action dimensions mismatch                | Verify your data processing transforms match the expected input/output dimensions of your robot. Check the action space definitions in your policy classes.                                  |
-| Diverging training loss                            | Check the `q01`, `q99`, and `std` values in `norm_stats.json` for your dataset. Certain dimensions that are rarely used can end up with very small `q01`, `q99`, or `std` values, leading to huge states and actions after normalization. You can manually adjust the norm stats as a workaround. |
+Sampled statistics are rejected for ordinary training unless `--data.allow-sampled-stats` is explicitly selected; the smoke script makes that diagnostic-only choice itself.
