@@ -17,7 +17,10 @@ def test_resume_requires_same_stats_and_manifest(tmp_path: Path, monkeypatch):
     (saved / "engram_stats_manifest.json").write_text(json.dumps(manifest))
     current_manifest = tmp_path / "current.json"
     current_manifest.write_text(json.dumps(manifest))
-    data = SimpleNamespace(engram_stats_manifest=str(current_manifest), asset_id="engram/train", norm_stats=stats)
+    data = SimpleNamespace(
+        engram_stats_manifest=str(current_manifest), asset_id="engram/train", norm_stats=stats,
+        engram_video_mode="original", engram_proxy_subset_only=False, engram_video_identity=None,
+    )
     loader = SimpleNamespace(data_config=lambda: data)
     manager = SimpleNamespace(
         directory=tmp_path,
@@ -33,4 +36,15 @@ def test_resume_requires_same_stats_and_manifest(tmp_path: Path, monkeypatch):
     data.norm_stats = stats
     current_manifest.write_text(json.dumps({"contract": "changed"}))
     with pytest.raises(ValueError, match="changed normalization"):
+        checkpoints.restore_state(manager, "initial", loader)
+    current_manifest.write_text(json.dumps(manifest))
+    data.engram_video_mode = "proxy_640"
+    data.engram_video_identity = "a" * 64
+    with pytest.raises(ValueError, match="Legacy checkpoint has no proxy identity"):
+        checkpoints.restore_state(manager, "initial", loader)
+    contract_path = saved / "engram_video_contract.json"
+    contract_path.write_text(json.dumps(checkpoints._engram_video_contract(data)))  # noqa: SLF001
+    assert checkpoints.restore_state(manager, "initial", loader) == ("state", {"params": "params"})
+    data.engram_video_identity = "b" * 64
+    with pytest.raises(ValueError, match="changed source-video/proxy identity"):
         checkpoints.restore_state(manager, "initial", loader)

@@ -1,9 +1,10 @@
 """Offline validation of a trained Engram OpenPI checkpoint in physical units."""
 
 import dataclasses
+import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import tyro
@@ -55,7 +56,15 @@ def main(
     gripper_threshold_percent: float = 0.0,
     max_samples: int = 256,
     seed: int = 42,
+    *,
+    video_mode: Literal["original", "proxy_640"] = "original",
+    proxy_root: str | None = None,
+    single_camera: bool = False,
 ) -> None:
+    if video_mode not in ("original", "proxy_640"):
+        raise ValueError(f"Unsupported video mode: {video_mode}")
+    if proxy_root is not None and video_mode != "proxy_640":
+        raise ValueError("proxy_root requires video_mode='proxy_640'")
     checkpoint = Path(checkpoint_dir)
     config = train_config.get_config("pi05_engram_w1_sandwich")
     config = dataclasses.replace(
@@ -63,9 +72,14 @@ def main(
         data=dataclasses.replace(
             config.data,
             data_root=data_root,
-            split="train",
+            # Validation shares the train asset namespace, without train-only
+            # observation augmentation in the policy input transforms.
+            split="val",
             prune_threshold_rad=prune_threshold_rad,
             gripper_threshold_percent=gripper_threshold_percent,
+            single_camera=single_camera,
+            video_mode=video_mode,
+            proxy_root=proxy_root,
         ),
     )
     data_config = config.data.create(config.assets_dirs, config.model)
@@ -80,6 +94,8 @@ def main(
         split="val",
         prune_threshold_rad=prune_threshold_rad,
         gripper_threshold_percent=gripper_threshold_percent,
+        video_mode=video_mode,
+        proxy_root=proxy_root,
     )
     try:
         policy = policy_config.create_trained_policy(config, checkpoint)
@@ -87,9 +103,17 @@ def main(
         result.update(
             {
                 "checkpoint": str(checkpoint),
+                "data_root": data_root,
                 "split": "validation",
                 "episodes": sum(len(part.episodes) for part in dataset.datasets) if hasattr(dataset, "datasets") else len(dataset.episodes),
                 "eligible_anchors": len(dataset),
+                "single_camera": single_camera,
+                "video_mode": video_mode,
+                "proxy_root": proxy_root,
+                "validation_video_identity": getattr(dataset, "video_identity", None),
+                "normalization_asset_id": data_config.asset_id,
+                "normalization_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                "normalization_stats_sha256": hashlib.sha256((manifest.parent / "norm_stats.json").read_bytes()).hexdigest(),
                 "metric": "offline physical action RMSE; not rollout success",
             }
         )
