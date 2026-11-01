@@ -93,3 +93,36 @@ For production proxies beside originals, use `--data.video-mode proxy_640` witho
 `examples/engram/benchmark_training.py` performs real pretrained π0.5 updates for the subset with completed proxies, using batch 256 on two H100s and saving no checkpoints. Invoke it twice with `--mode original` and `--mode proxy_640`, respectively, using the same seed and other options. Omit `--proxy-root` to compare adjacent proxies on their actual storage. After all training proxies have been created, add `--full-corpus` to sample across the entire training split; the benchmark prints actual per-source episode and anchor counts. The reported loader wait follows each completed GPU step and allows worker prefetch during that step; explicit synchronization makes this diagnostic different from a fully asynchronous end-to-end timing.
 
 `--data.single-camera` is an Engram-only opt-in that removes the two permanently masked wrist-image streams from π0.5's vision and transformer inputs. It does not change the physical state/action data or the statistics. This mode rejects samples that actually provide wrist images; omit the flag to keep the existing three-slot policy interface. The CPU smoke compares losses and gradients against the ordinary masked-wrist path.
+
+### Serve a completed checkpoint
+
+The Engram server uses OpenPI's existing WebSocket policy protocol. It reads a completed checkpoint's parameters, normalization statistics and provenance, and checks the saved statistics hash and strict 640-pixel training contract. A completed checkpoint may be copied to a directory with a nonnumeric name. It does not open the training dataset or require its original mount paths. The server imposes the active run's single-camera configuration; the checkpoint's saved video contract does not itself record that flag. The PaliGemma tokenizer must be available at `$OPENPI_DATA_HOME/big_vision/paligemma_tokenizer.model` (or `~/.cache/openpi/big_vision/paligemma_tokenizer.model` if the variable is unset).
+
+```bash
+uv run examples/engram/serve_pi05.py \
+  --checkpoint-dir /path/to/checkpoint/10000 --host 127.0.0.1 --port 8000 --camera-layout left \
+  --expected-source-manifest-sha256 13b3f4a0df389de3305145449d609cb01f7384656a5305f1e7d20e308ea91eca
+```
+
+The optional source hash shown is for the current 2026-11-01 mixed Engram training run; omit it when deliberately serving another compatible source snapshot. The validated source hash is also exposed in server metadata.
+
+The `--camera-layout` applies to every request: `left` accepts an already-cropped left-eye RGB image; `stereo` selects the left half of a side-by-side stereo RGB image. The selected eye must be 16:9. Images must be HWC `uint8` RGB or floating RGB in `[0, 1]`; the server area-resizes the eye to 640×360, then the unchanged OpenPI pipeline letterboxes it to 224×224. Existing 640×360 left frames are not cropped or rescaled again. Training proxies also underwent YUV conversion and lossy H.264 encoding, so live RGB preprocessing is not bit-identical to those videos.
+
+The state is ordered as **ANKLE, KNEE, BUTTOCK, WAIST, NECK1, NECK2, LEFT_J1–LEFT_J7, RIGHT_J1–RIGHT_J7**, in radians. Supply 20 measured joint positions, or append measured left and right gripper positions in percent `[0, 100]`. A 20D state marks end-effector feedback unavailable. For 22D state, an omitted `action_mask` means both grippers are measured; to use the 22D placeholder layout from the joint-only dataset, supply `action_mask=[True]*20+[False]*2`. Both end-effector mask entries must agree. The server supplies the unavailable marker and masked normalized state; provide the original task prompt without adding that marker yourself. It rejects requests if OpenPI's exact prompt-plus-state token sequence would exceed the model's 200-token limit.
+
+```python
+import numpy as np
+from PIL import Image
+from openpi_client.websocket_client_policy import WebsocketClientPolicy
+
+client = WebsocketClientPolicy(host="127.0.0.1", port=8000)
+observation = {
+    "observation/head_rgbd": np.asarray(Image.open("left_rgb.png").convert("RGB")),
+    "observation/joint_position": np.load("measured_joints_rad.npy"),  # shape (20,)
+    "prompt": "dual gripperopen bread bag and take out bread slice",
+}
+prediction = client.infer(observation)
+print(prediction["actions"].shape, prediction["gripper_available"])  # (64, 20), False
+```
+
+The example prompt is a task string from training; a caller can provide another task instruction. The returned `actions` are **predicted absolute targets** at the nominal 30 Hz, for a 64-step horizon. They contain 20 joints when end-effector feedback is unavailable, or 20 joints plus two absolute gripper percentages when it is available. These are raw, unbounded predictions: values are not clipped, so predicted gripper percentages can fall outside `[0, 100]`. The policy does not infer finger commands from the unlabeled hand videos; do not represent a dexterous hand as two gripper values. This server returns predictions and does not execute robot commands.
