@@ -48,11 +48,8 @@ From the repository root, after the 10,000-step checkpoint has completed:
 export OPENPI_DATA_HOME=/path/to/openpi_cache  # contains big_vision/paligemma_tokenizer.model
 uv run examples/engram/serve_pi05.py \
   --checkpoint-dir /hand_keypoint_data/engram_data/ckpt/pi05/20261101_engram_pi05_strict_640g4_b256_2h100/10000 \
-  --host 127.0.0.1 --port 8000 --camera-layout left \
-  --expected-source-manifest-sha256 13b3f4a0df389de3305145449d609cb01f7384656a5305f1e7d20e308ea91eca
+  --host 127.0.0.1 --port 8000 --camera-layout left
 ```
-
-The optional source hash shown is for the current 2026-11-01 mixed Engram training run; omit it when deliberately serving another compatible source snapshot. The validated source hash is also exposed in server metadata.
 
 The `--camera-layout` applies to every request: `left` accepts an already-cropped left-eye RGB image; `stereo` selects the left half of a side-by-side stereo RGB image. The selected eye must be 16:9. Images must be HWC `uint8` RGB or floating RGB in `[0, 1]`; the server area-resizes the eye to 640×360, then the unchanged OpenPI pipeline letterboxes it to 224×224. Existing 640×360 left frames are not cropped or rescaled again. Training proxies also underwent YUV conversion and lossy H.264 encoding, so live RGB preprocessing is not bit-identical to those videos.
 
