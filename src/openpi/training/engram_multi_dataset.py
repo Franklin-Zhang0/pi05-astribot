@@ -518,7 +518,8 @@ class EngramMultiEmbodimentDataset:
         while len(self._video_cache) > self.video_cache_size:
             self._video_cache.popitem(last=False)[1].close()
         stream = container.streams.video[0]
-        stream.codec_context.thread_count = 1
+        if not stream.codec_context.is_open:
+            stream.codec_context.thread_count = 1
         target = start + timestamp
         container.seek(max(0, int(target / float(stream.time_base))), stream=stream, backward=True, any_frame=False)
         previous = selected = None

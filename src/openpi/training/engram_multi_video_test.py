@@ -61,3 +61,31 @@ def test_proxy_preserves_timing_and_geometry(tmp_path, robot, role, width, heigh
         stream.write(b"corruption")
     with pytest.raises(ValueError, match="sidecar"):
         video.validate_proxy(tmp_path, original, destination, robot, role, 0, len(timestamps))
+
+
+def test_dataset_cached_decoder_seeks_repeatedly_without_stale_frames(tmp_path):
+    from collections import OrderedDict
+    from types import SimpleNamespace
+
+    from openpi.training.engram_multi_dataset import EngramMultiEmbodimentDataset
+
+    original = tmp_path / "original.mp4"
+    timestamps = make_video(original, 640, 180, 2)
+    dataset = object.__new__(EngramMultiEmbodimentDataset)
+    dataset.decode_images = True
+    dataset.video_cache_size = 2
+    dataset.video_tolerance_s = 0.0001
+    dataset._video_cache = OrderedDict()  # noqa: SLF001
+    episode = SimpleNamespace(embodiment_id=0, episode_index=0, videos={"head": (str(original), 0.0, True)})
+    try:
+        values = []
+        for index in (0, 5, 1, 9, 0):
+            image = dataset._read_image(episode, "head", float(timestamps[index]))  # noqa: SLF001
+            values.append(float(image[..., 0].mean()))
+            assert abs(values[-1] - (100 + index)) < 3
+            assert image[..., 2].mean() < 6
+        assert values[0] == values[-1]
+        assert values[3] > values[2]
+        assert len(dataset._video_cache) == 1  # noqa: SLF001
+    finally:
+        dataset.close()
