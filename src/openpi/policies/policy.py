@@ -93,6 +93,11 @@ class Policy(BasePolicy):
             "state": inputs["state"],
             "actions": self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs),
         }
+        # Typed action transforms need the same route and availability mask
+        # when converting the diffusion result back into physical commands.
+        for key in ("embodiment_id", "action_mask"):
+            if key in inputs:
+                outputs[key] = inputs[key]
         model_time = time.monotonic() - start_time
         if self._is_pytorch_model:
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)

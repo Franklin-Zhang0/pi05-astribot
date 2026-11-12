@@ -12,15 +12,19 @@ import openpi.shared.download as download
 
 
 class PaligemmaTokenizer:
-    def __init__(self, max_len: int = 48):
+    def __init__(self, max_len: int = 48, *, preserve_text: bool = False, reject_truncation: bool = False):
         self._max_len = max_len
+        self._preserve_text = preserve_text
+        self._reject_truncation = reject_truncation
 
         path = download.maybe_download("gs://big_vision/paligemma_tokenizer.model", gs={"token": "anon"})
         with path.open("rb") as f:
             self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
 
     def tokenize(self, prompt: str, state: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
-        cleaned_text = prompt.strip().replace("_", " ").replace("\n", " ")
+        cleaned_text = prompt.strip()
+        if not self._preserve_text:
+            cleaned_text = cleaned_text.replace("_", " ").replace("\n", " ")
         if state is not None:
             # This is the Pi05 format, where the state is part of the discrete language input.
             discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
@@ -32,6 +36,10 @@ class PaligemmaTokenizer:
             # tokenize "\n" separately as the "start of answer" token
             tokens = self._tokenizer.encode(cleaned_text, add_bos=True) + self._tokenizer.encode("\n")
         tokens_len = len(tokens)
+        if tokens_len > self._max_len and self._reject_truncation:
+            raise ValueError(
+                f"Prompt and state require {tokens_len} tokens, exceeding the {self._max_len}-token model limit"
+            )
         if tokens_len < self._max_len:
             padding = [False] * (self._max_len - tokens_len)
             mask = [True] * tokens_len + padding

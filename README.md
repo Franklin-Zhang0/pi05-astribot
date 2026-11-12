@@ -1,6 +1,99 @@
-# Engram Dex W1 π0.5 fine-tuning and inference
+# Engram multi-embodiment π0.5 fine-tuning and inference
 
-The current mixed-data run uses 820 complete episodes: 778 for training and 42 for validation. It trains 20 joint deltas, with gripper supervision only where labels are available. It uses left-camera 640×360 video proxies, a global batch size of 256, and checkpoints every 10,000 steps. See the [mixed-data training recipe](#mixed-end-effector-snapshot-2026-11-01) for details.
+The `pi05_engram_multi` recipe trains Dex W1 gripper, Linker L6 and Linker L20 demonstrations alongside Galbot demonstrations. It starts from `pi05_base`, uses a shared diffusion transformer with separate input and output projections for each robot/end-effector route, and trains with the head camera plus wrist cameras wherever recorded. The earlier 22-channel recipe and server remain available for existing checkpoints; their instructions are below.
+
+## Multi-embodiment recipe, 2026-11-12
+
+The pinned [dataset manifest](examples/engram/kitchen_multi_20261112.json) selects complete successful episodes from `kitchen_new`, excludes partial and failed demonstrations, checks duplicate annotation windows, and holds out recording packages across every source. It preserves the earlier validation packages and extends the split to approximately 5% of packages. The audit selects:
+
+| Robot / end effector | Train episodes | Validation episodes | Total |
+| --- | ---: | ---: | ---: |
+| Dex W1 / gripper | 670 | 35 | 705 |
+| Dex W1 / Linker L6 | 712 | 38 | 750 |
+| Dex W1 / Linker L20 | 36 | 2 | 38 |
+| Galbot / Inspire RH56DFX hand | 179 | 9 | 188 |
+| **Total** | **1,597** | **84** | **1,681** |
+
+Some W1 exports lack end-effector commands and feedback; the Galbot export lacks all finger labels. They still contribute joint supervision. Missing hand state and loss channels are masked; no hand commands are inferred as labels. Galbot inference therefore returns arm targets only. The old 113-episode export with incomplete provenance stays excluded.
+
+### Inputs, prompts and actions
+
+Each sample contains RGB images, current measured joints and available hand feedback, an explicit numeric embodiment route, an availability mask, and a task instruction. Each of the four routes has independent projections into and out of the shared diffusion transformer. The route is supplied numerically even for plain prompts. Half of training samples use the original instruction text; half use canonical JSON, for example:
+
+```json
+{"end_effector_state_available":true,"end_effector_type":"linker_l6","instruction":"pick up the cup","robot_type":"dex_w1"}
+```
+
+JSON keys and instruction text are preserved during tokenization. Plain prompts with missing end-effector state receive `End-effector state unavailable. ` before the instruction. JSON prompts mark the same condition with `false`. The 320-token budget includes the discretized 64-channel state; overlong inputs raise an error rather than silently truncating.
+
+The model uses a **64-step, 64-channel packed action**. Only the physical channels for the selected route receive loss. All joint targets are deltas from the **current measured joint state**, shared by the whole 64-step horizon. Hand targets are absolute positions; they are never joint deltas.
+
+| Route | Joint channels (radians) | Hand channels | Unused channels |
+| --- | --- | --- | --- |
+| W1 / gripper | `0:20` | `20:22`, left then right, percent `[0,100]` | `22:64` |
+| W1 / Linker L6 | `0:20` | `20:32`, 6 left then 6 right, percent `[0,100]` | `32:64` |
+| W1 / Linker L20 | `0:20` | `20:52`, 16 left then 16 right, signed percent `[-100,100]` | `52:64` |
+| Galbot / Inspire | `0:14` | `20:32` reserved, **unlabeled and masked** | `14:20`, `32:64` |
+
+W1 joint order is `ANKLE, KNEE, BUTTOCK, WAIST, NECK1, NECK2, LEFT_J1–LEFT_J7, RIGHT_J1–RIGHT_J7`. Galbot order is `right_arm_joint1–7, left_arm_joint1–7`. Hand channel order follows the recorded command arrays within each side. Padded and unavailable channels are excluded from loss. Route-specific statistics use training anchors only, with at least a 0.1-radian joint quantile span and a 5-percentage-point hand span. Samples are dropped when **all** future joint movements are below 0.01 rad and there is no recorded hand movement. Available hand-only movements remain eligible.
+
+Training uses the W1 stereo camera's **left eye**, resized to 640×360; Galbot uses its left head camera at 480×360, preserving its 4:3 aspect ratio. W1 wrists stay 640×480 and Galbot wrists stay 640×360. The final model transform letterboxes every camera to 224×224. Absent wrist cameras are zero-filled with attention masks. Only these needed camera streams are preprocessed. Proxies are adjacent `*_640.mp4` files with a maximum four-frame GOP; immutable sidecars verify every original timestamp, frame count, geometry and source/proxy hashes. Original videos remain unchanged.
+
+```bash
+# From the repository root, after uv sync:
+uv run examples/engram/preprocess_multi.py examples/engram/kitchen_multi_20261112.json \
+  --adjacent --split all --decoder nvdec --cuda-devices 0,1,2,3 --workers 8 \
+  --receipt /path/to/run/preprocess.json
+export ENGRAM_ASSETS_DIR=/path/to/run/assets
+bash examples/engram/finetune_multi_pi05.sh stats --batch-size 256 --num-workers 0
+bash examples/engram/finetune_multi_pi05.sh train my-engram-multi \
+  --batch-size 256 --num-train-steps 30000 --save-interval 10000 --keep-period 10000 \
+  --fsdp-devices 4 --gradient-accumulation-steps 16 --checkpoint-completed-steps \
+  --checkpoint-dir-override /hand_keypoint_data/engram_data/ckpt/pi05/DATE_EXPNAME
+```
+
+The default global batch is 256: 16 accumulated global microbatches of 16 samples, four samples per GPU on four GPUs. Statistics require the full retained training split; sampled diagnostic statistics are rejected by production training and serving. Validation packages never contribute statistics or training samples. The checkpoint includes its exact statistics, source provenance, route/camera/prompt contract and original training instruction list (`assets/engram/multi_embodiment_train/prompt.json`). Resume rejects changed contracts.
+
+### Multi-embodiment inference
+
+Use the new server for `pi05_engram_multi` checkpoints. It reads checkpoint-owned assets and does not need the training dataset mounted. Set `OPENPI_DATA_HOME` to a cache containing `big_vision/paligemma_tokenizer.model`.
+
+```bash
+uv run examples/engram/serve_multi_pi05.py \
+  --checkpoint-dir /hand_keypoint_data/engram_data/ckpt/pi05/DATE_EXPNAME/30000 \
+  --host 127.0.0.1 --port 8000 --head-layout left
+```
+
+```python
+from openpi_client.websocket_client_policy import WebsocketClientPolicy
+
+client = WebsocketClientPolicy(host="127.0.0.1", port=8000)
+prediction = client.infer({
+    "observation/head_rgbd": left_head_rgb,        # HWC RGB uint8
+    "observation/left_wrist_rgbd": left_wrist_rgb, # optional
+    "observation/right_wrist_rgbd": right_wrist_rgb, # optional
+    "observation/joint_position": measured_joints_rad, # shape (20,) for W1
+    "observation/hand_position": measured_hand_percent, # optional; (12,) for L6
+    "prompt": {
+        "instruction": "pick up the cup",
+        "robot_type": "dex_w1",
+        "end_effector_type": "linker_l6",
+        "end_effector_state_available": True,
+    },
+})
+joint_targets = prediction["joint_actions"]
+hand_targets = prediction.get("end_effector_actions")
+```
+
+A plain `"prompt": "pick up the cup"` is also supported; provide `robot_type` and `end_effector_type` as top-level fields. Canonical end-effector names are `gripper`, `linker_l6`, `linker_l20`, and `inspire_rh56dfx_hand`; robot names are `dex_w1` and `galbot`. Set `head_camera_layout="stereo"` only for a W1 side-by-side image. Galbot's head input is its left eye. Camera geometry is checked against training preprocessing.
+
+Omit hand feedback when unavailable, or explicitly set `end_effector_state_available=false`. Do not pass placeholder hand values as measured feedback. Hand feedback can alternatively be appended to the joint array. The new interface derives its mask from these fields and rejects caller-supplied `action_mask`. Galbot accepts 14 arm joints and no hand feedback because its hand channels have no training labels.
+
+The server unnormalizes route-specific predictions and adds the current measured joint anchor exactly once, returning **absolute targets**. `joint_actions` is `(64,20)` for W1 or `(64,14)` for Galbot. With measured and supervised hand feedback, `end_effector_actions` is `(64,2)`, `(64,12)` or `(64,32)` for gripper, L6 or L20. `actions` concatenates physical joints and available hands, giving `(64,22)`, `(64,32)`, `(64,52)`, or joint-only shapes. It never includes packed padding. Outputs are raw, unclipped predictions at nominal 30 Hz; the server does not execute robot commands.
+
+## Earlier 22-channel gripper recipe
+
+The following sections describe the 2026-11-01 checkpoint and its legacy `serve_pi05.py` server. That recipe used 820 complete episodes, one head camera and a padded 32-channel model head. It is separate from the four-route recipe above.
 
 ## Setup
 

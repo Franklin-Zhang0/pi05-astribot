@@ -110,7 +110,7 @@ def main(
         or engram_prune_threshold_rad is not None
         or engram_gripper_threshold_percent is not None
     ):
-        if not isinstance(config.data, _config.EngramDataConfig):
+        if not isinstance(config.data, _config.EngramDataConfig | _config.EngramMultiDataConfig):
             raise ValueError("Engram dataset overrides require an Engram config")
         data_kwargs = {}
         if engram_data_root is not None:
@@ -122,7 +122,8 @@ def main(
         if engram_prune_threshold_rad is not None:
             data_kwargs["prune_threshold_rad"] = engram_prune_threshold_rad
         if engram_gripper_threshold_percent is not None:
-            data_kwargs["gripper_threshold_percent"] = engram_gripper_threshold_percent
+            field = "hand_threshold_percent" if isinstance(config.data, _config.EngramMultiDataConfig) else "gripper_threshold_percent"
+            data_kwargs[field] = engram_gripper_threshold_percent
         config = dataclasses.replace(config, data=dataclasses.replace(config.data, **data_kwargs))
     if assets_base_dir is not None:
         config = dataclasses.replace(config, assets_base_dir=assets_base_dir)
@@ -138,6 +139,47 @@ def main(
         raise ValueError("max_frames must be at least batch_size")
     data_config = config.data.create(config.assets_dirs, config.model)
 
+    if data_config.engram_multi_data_dir is not None:
+        from pathlib import Path
+
+        from openpi.shared.engram_multi import save_route_stats
+        from openpi.training import engram_multi_dataset
+
+        if data_config.engram_split != "train":
+            raise ValueError("Multi-embodiment normalization must be fit on training data")
+        stats_config = dataclasses.replace(data_config, engram_decode_images=False, engram_video_mode="original")
+        dataset = _data_loader.create_torch_dataset(stats_config, config.model.action_horizon, config.model)
+        route_stats, counts = engram_multi_dataset.compute_training_stats(
+            dataset, seed=config.seed, batch_size=config.batch_size, max_frames=max_frames,
+        )
+        output_path = Path(data_config.engram_multi_stats_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        save_route_stats(output_path, route_stats)
+        manifest = engram_multi_dataset.stats_identity(
+            data_config.engram_multi_data_dir, "train", config.model.action_horizon,
+            data_config.engram_prune_threshold_rad, data_config.engram_gripper_threshold_percent,
+        )
+        manifest.update({
+            "max_frames": max_frames, "seed": config.seed,
+            "stats_filename": output_path.name,
+            "stats_sha256": hashlib.sha256(output_path.read_bytes()).hexdigest(),
+            "structured_prompt_probability": data_config.engram_multi_structured_probability,
+            "action_head_names": list(config.model.action_head_names),
+            "max_token_len": config.model.max_token_len,
+            **counts,
+            "sampled_anchors": counts["used_anchors"],
+        })
+        prompt_catalog = {}
+        from openpi.shared.engram_multi import ROUTE_NAMES
+
+        for episode in dataset.episodes:
+            prompts = prompt_catalog.setdefault(ROUTE_NAMES[episode.embodiment_id], set())
+            prompts.update(episode.tasks[int(episode.task_indices[a])] for a in episode.anchors)
+        manifest["prompts_by_route"] = {key: sorted(values) for key, values in prompt_catalog.items()}
+        Path(data_config.engram_multi_manifest_path).write_text(json.dumps(manifest, indent=2) + "\n")
+        print(f"Wrote multi-embodiment training statistics to {output_path}: {counts}")
+        return
+
     if data_config.engram_data_dir is not None and data_config.engram_split == "val":
         raise ValueError("Normalization statistics may not be fit on validation")
 
@@ -151,7 +193,8 @@ def main(
         # Use a vectorized exact anchor traversal. In particular, placeholders
         # from joint-only recordings must not alter gripper statistics, and the
         # final partial batch must not be silently dropped.
-        from openpi.training.engram_dataset import compute_training_stats, stats_identity
+        from openpi.training.engram_dataset import compute_training_stats
+        from openpi.training.engram_dataset import stats_identity
 
         dataset = _data_loader.create_torch_dataset(data_config, config.model.action_horizon, config.model)
         norm_stats, counts = compute_training_stats(dataset, seed=config.seed, max_frames=max_frames)

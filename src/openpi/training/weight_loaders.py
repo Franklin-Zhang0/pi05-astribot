@@ -73,6 +73,23 @@ class ExpandedActionDimCheckpointWeightLoader(WeightLoader):
 
 
 @dataclasses.dataclass(frozen=True)
+class MultiEmbodimentCheckpointWeightLoader(WeightLoader):
+    """Initialize routed action projections from pi05_base's native projections.
+
+    Backbone parameters must all be present with exactly matching shapes. Only
+    the physical action axes may grow, and every routed head receives the same
+    pretrained 32-channel overlap. Checkpoint restore/resume uses the ordinary
+    complete multi-head parameter tree instead of this base initialization path.
+    """
+
+    params_path: str
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+        return _merge_params_with_action_heads(loaded_params, params)
+
+
+@dataclasses.dataclass(frozen=True)
 class PaliGemmaWeightLoader(WeightLoader):
     """Loads weights from the official PaliGemma checkpoint.
 
@@ -160,4 +177,64 @@ def _merge_params_with_expanded_action_dim(loaded_params: at.Params, params: at.
         expanded[overlap] = loaded_value[overlap].astype(expanded.dtype, copy=False)
         result[key] = expanded
 
+    return flax.traverse_util.unflatten_dict(result, sep="/")
+
+
+def _merge_params_with_action_heads(loaded_params: at.Params, params: at.Params) -> at.Params:
+    """Expand pi05 action axes into named heads while loading the full backbone."""
+    flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
+    flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+    head_pattern = re.compile(r"^(.*?)(action_in_projs|action_out_projs)/([^/]+)/(kernel|bias)(/value)?$")
+    result = {}
+    used = set()
+    head_names = set()
+    for key, reference in flat_ref.items():
+        match = head_pattern.fullmatch(key)
+        if match is None:
+            if key not in flat_loaded:
+                if "lora" in key:
+                    if isinstance(reference, jax.ShapeDtypeStruct):
+                        raise ValueError(f"Cannot initialize missing LoRA shape without values: {key}")
+                    result[key] = reference
+                    continue
+                raise ValueError(f"Checkpoint is missing backbone parameter: {key}")
+            loaded = flat_loaded[key]
+            if loaded.shape != reference.shape:
+                raise ValueError(f"Checkpoint backbone shape mismatch: {key}: {loaded.shape} != {reference.shape}")
+            result[key] = np.asarray(loaded, dtype=reference.dtype)
+            used.add(key)
+            continue
+
+        prefix, projection, name, parameter, suffix = match.groups()
+        head_names.add(name)
+        source = f"{prefix}{projection[:-1]}/{parameter}{suffix or ''}"
+        if source not in flat_loaded:
+            raise ValueError(f"Checkpoint is missing native action projection parameter: {source}")
+        loaded = flat_loaded[source]
+        used.add(source)
+        if loaded.ndim != len(reference.shape):
+            raise ValueError(f"Action projection rank mismatch: {key}")
+        # The expert hidden width must match exactly. Only the incoming action
+        # dimension / outgoing velocity dimension may be expanded.
+        axis = 0 if parameter == "bias" or projection == "action_in_projs" else 1
+        if projection == "action_in_projs" and parameter == "bias":
+            allowed_shape = loaded.shape == reference.shape
+        else:
+            allowed_shape = (
+                all(old == new for i, (old, new) in enumerate(zip(loaded.shape, reference.shape, strict=True)) if i != axis)
+                and reference.shape[axis] >= loaded.shape[axis]
+            )
+        if not allowed_shape:
+            raise ValueError(f"Action projection shape mismatch outside expanded action axis: {key}")
+        if isinstance(reference, jax.ShapeDtypeStruct):
+            expanded = np.zeros(reference.shape, dtype=reference.dtype)
+        else:
+            expanded = np.array(reference, copy=True)
+        overlap = tuple(slice(0, size) for size in loaded.shape)
+        expanded[overlap] = np.asarray(loaded, dtype=expanded.dtype)
+        result[key] = expanded
+    if not head_names:
+        raise ValueError("Multi-embodiment initialization requires named action heads")
+    if unexpected := set(flat_loaded) - used:
+        raise ValueError(f"Checkpoint has unexpected parameters: {sorted(unexpected)[:5]}")
     return flax.traverse_util.unflatten_dict(result, sep="/")

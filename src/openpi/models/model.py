@@ -110,6 +110,10 @@ class Observation(Generic[ArrayT]):
     # physical zero targets; they are absent labels for partially annotated data.
     action_mask: at.Bool[ArrayT, "*b s"] | None = None
 
+    # Numeric robot/end-effector route. It is independent of the language
+    # prompt so plain instruction requests still select the correct head.
+    embodiment_id: at.Int[ArrayT, "*b"] | None = None
+
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "Observation[ArrayT]":
         """This method defines the mapping between unstructured data (i.e., nested dict) to the structured Observation format."""
@@ -131,6 +135,7 @@ class Observation(Generic[ArrayT]):
             token_ar_mask=data.get("token_ar_mask"),
             token_loss_mask=data.get("token_loss_mask"),
             action_mask=data.get("action_mask"),
+            embodiment_id=data.get("embodiment_id"),
         )
 
     def to_dict(self) -> at.PyTree[ArrayT]:
@@ -211,6 +216,7 @@ def preprocess_observation(
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
         action_mask=observation.action_mask,
+        embodiment_id=observation.embodiment_id,
     )
 
 

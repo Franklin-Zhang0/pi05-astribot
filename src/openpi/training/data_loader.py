@@ -1,5 +1,6 @@
 from collections.abc import Iterator, Sequence
 import dataclasses
+import json
 import logging
 import multiprocessing
 import os
@@ -138,6 +139,20 @@ def create_torch_dataset(
         raise ValueError("Repo ID is not set. Cannot create dataset.")
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
+
+    if data_config.engram_multi_data_dir is not None:
+        from openpi.training.engram_multi_dataset import EngramMultiEmbodimentDataset
+
+        return EngramMultiEmbodimentDataset(
+            data_config.engram_multi_data_dir,
+            action_horizon,
+            split=data_config.engram_split,
+            prune_threshold_rad=data_config.engram_prune_threshold_rad,
+            hand_threshold_percent=data_config.engram_gripper_threshold_percent,
+            decode_images=data_config.engram_decode_images,
+            video_mode=data_config.engram_video_mode,
+            proxy_root=data_config.engram_proxy_root,
+        )
 
     if data_config.engram_data_dir is not None:
         # Lazy import keeps the existing LeRobot v2 and fake-data paths untouched.
@@ -328,6 +343,25 @@ def create_torch_data_loader(
             execute in the main process.
         seed: The seed to use for shuffling the data.
     """
+    if data_config.engram_multi_data_dir is not None and not skip_norm_stats:
+        from openpi.training import engram_multi_dataset
+
+        if data_config.norm_stats is None:
+            raise ValueError("Multi-embodiment normalization missing; compute training statistics first")
+        engram_multi_dataset.check_stats_identity(
+            data_config.engram_multi_manifest_path,
+            data_config.engram_multi_data_dir,
+            data_config.engram_split,
+            action_horizon,
+            data_config.engram_prune_threshold_rad,
+            data_config.engram_gripper_threshold_percent,
+            allow_sampled_stats=data_config.engram_allow_sampled_stats,
+        )
+        manifest = json.loads(pathlib.Path(data_config.engram_multi_manifest_path).read_text())
+        if (manifest.get("max_token_len") != model_config.max_token_len
+                or manifest.get("action_head_names") != list(model_config.action_head_names)
+                or manifest.get("structured_prompt_probability") != data_config.engram_multi_structured_probability):
+            raise ValueError("Multi-embodiment model or prompt mixture differs from its statistics contract")
     if data_config.engram_data_dir is not None and not skip_norm_stats:
         if data_config.norm_stats is None:
             raise ValueError("Engram normalization statistics missing; run scripts/compute_norm_stats.py first")
@@ -343,7 +377,7 @@ def create_torch_data_loader(
             allow_sampled_stats=data_config.engram_allow_sampled_stats,
         )
     dataset = create_torch_dataset(data_config, action_horizon, model_config)
-    if data_config.engram_data_dir is not None:
+    if data_config.engram_data_dir is not None or data_config.engram_multi_data_dir is not None:
         data_config = dataclasses.replace(data_config, engram_video_identity=dataset.video_identity)
     dataset = transform_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats)
 

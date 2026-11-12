@@ -1,4 +1,5 @@
 import dataclasses
+import re
 from typing import TYPE_CHECKING
 
 import flax.nnx as nnx
@@ -31,12 +32,22 @@ class Pi0Config(_model.BaseModelConfig):
     pi05: bool = False
     # This config option is not used directly by the model, but it is read by the ModelTransformFactory.
     discrete_state_input: bool = None  # type: ignore
+    # Empty keeps the released single-projection parameter tree unchanged.
+    # Otherwise the order is the numeric Observation.embodiment_id contract.
+    action_head_names: tuple[str, ...] = ()
 
     def __post_init__(self):
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
         if self.discrete_state_input is None:
             object.__setattr__(self, "discrete_state_input", self.pi05)
+        if self.action_head_names:
+            if not self.pi05:
+                raise ValueError("Embodiment action heads currently require pi05=True")
+            if len(set(self.action_head_names)) != len(self.action_head_names) or any(
+                not re.fullmatch(r"[a-z][a-z0-9_]*", name) for name in self.action_head_names
+            ):
+                raise ValueError("Action head names must be unique lowercase identifiers")
 
     @property
     @override
@@ -71,10 +82,20 @@ class Pi0Config(_model.BaseModelConfig):
                 state=jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.float32),
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
+                action_mask=(
+                    jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.bool_) if self.action_head_names else None
+                ),
+                embodiment_id=(jax.ShapeDtypeStruct([batch_size], jnp.int32) if self.action_head_names else None),
             )
         action_spec = jax.ShapeDtypeStruct([batch_size, self.action_horizon, self.action_dim], jnp.float32)
 
         return observation_spec, action_spec
+
+    def fake_obs(self, batch_size: int = 1) -> _model.Observation:
+        observation = super().fake_obs(batch_size)
+        if self.action_head_names:
+            observation = dataclasses.replace(observation, embodiment_id=jnp.zeros((batch_size,), dtype=jnp.int32))
+        return observation
 
     def get_freeze_filter(self) -> nnx.filterlib.Filter:
         """Returns the freeze filter based on the model config."""

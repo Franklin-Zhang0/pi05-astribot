@@ -4,6 +4,7 @@ import abc
 from collections.abc import Sequence
 import dataclasses
 import difflib
+import hashlib
 import logging
 import pathlib
 from typing import Any, Literal, Protocol, TypeAlias
@@ -99,6 +100,12 @@ class DataConfig:
     datasets: Sequence[droid_rlds_dataset.RLDSDataset] = ()
     # Local Engram LeRobot v3 data (the pinned LeRobot reader only supports v2).
     engram_data_dir: str | None = None
+    engram_multi_data_dir: str | None = None
+    engram_multi_stats_path: str | None = None
+    engram_multi_manifest_path: str | None = None
+    engram_multi_stats_sha256: str | None = None
+    engram_multi_manifest_sha256: str | None = None
+    engram_multi_structured_probability: float = 0.5
     engram_split: Literal["all", "train", "val"] = "all"
     engram_prune_threshold_rad: float = 0.01
     engram_gripper_threshold_percent: float = 0.0
@@ -296,6 +303,76 @@ class EngramDataConfig(DataConfigFactory):
             engram_proxy_subset_only=self.proxy_subset_only,
             engram_stats_manifest=str(pathlib.Path(self.assets.assets_dir or assets_dirs) / base.asset_id / "engram_stats_manifest.json"),
             data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class EngramMultiDataConfig(DataConfigFactory):
+    """Joint and hand supervision across the four kitchen embodiments."""
+
+    repo_id: str = "engram/multi_embodiment"
+    data_root: str = str(pathlib.Path(__file__).resolve().parents[3] / "examples/engram/kitchen_multi_20261112.json")
+    split: Literal["train", "val"] = "train"
+    prune_threshold_rad: float = 0.01
+    hand_threshold_percent: float = 0.0
+    structured_prompt_probability: float = 0.5
+    allow_sampled_stats: bool = False
+    video_mode: Literal["original", "proxy_640"] = "proxy_640"
+    proxy_root: str | None = None
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        from openpi.policies import engram_multi_policy
+        from openpi.shared.engram_multi import load_route_stats
+
+        if not 0 <= self.structured_prompt_probability <= 1:
+            raise ValueError("structured_prompt_probability must be between zero and one")
+        if model_config.action_dim != 64 or model_config.model_type != ModelType.PI05:
+            raise ValueError("The multi-embodiment recipe requires the 64-channel pi0.5 action layout")
+        if tuple(model_config.action_head_names) != tuple(engram_multi_policy.ROUTE_NAMES):
+            raise ValueError("Model action-head ordering differs from the dataset embodiment routing")
+        asset_id = self.assets.asset_id or f"{self.repo_id}_train"
+        assets_dir = pathlib.Path(self.assets.assets_dir or assets_dirs) / asset_id
+        stats_path = assets_dir / "engram_multi_stats.json"
+        manifest_path = assets_dir / "engram_multi_manifest.json"
+        stats = load_route_stats(stats_path) if stats_path.is_file() else None
+        model_transforms = _transforms.Group(inputs=[
+            _transforms.ResizeImages(224, 224),
+            _transforms.TokenizePrompt(
+                _tokenizer.PaligemmaTokenizer(model_config.max_token_len, preserve_text=True, reject_truncation=True),
+                discrete_state_input=True,
+            ),
+            _transforms.PadStatesAndActions(model_config.action_dim),
+        ])
+        return dataclasses.replace(
+            self.base_config or DataConfig(),
+            repo_id=self.repo_id,
+            asset_id=asset_id,
+            # Normalization is conditional on the numeric embodiment route.
+            # The generic OpenPI normalization layer therefore has no entries.
+            norm_stats={} if stats is not None else None,
+            use_quantile_norm=True,
+            engram_multi_data_dir=self.data_root,
+            engram_multi_stats_path=str(stats_path),
+            engram_multi_manifest_path=str(manifest_path),
+            engram_multi_stats_sha256=hashlib.sha256(stats_path.read_bytes()).hexdigest() if stats is not None else None,
+            engram_multi_manifest_sha256=(hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+                                          if manifest_path.is_file() else None),
+            engram_multi_structured_probability=self.structured_prompt_probability,
+            engram_split=self.split,
+            engram_prune_threshold_rad=self.prune_threshold_rad,
+            engram_gripper_threshold_percent=self.hand_threshold_percent,
+            engram_allow_sampled_stats=self.allow_sampled_stats,
+            engram_video_mode=self.video_mode,
+            engram_proxy_root=self.proxy_root,
+            data_transforms=_transforms.Group(
+                inputs=[engram_multi_policy.MultiInputs(
+                    route_stats=stats, structured_probability=self.structured_prompt_probability,
+                    train=self.split == "train",
+                )],
+                outputs=[engram_multi_policy.MultiOutputs(route_stats=stats)],
+            ),
             model_transforms=model_transforms,
         )
 
@@ -644,6 +721,34 @@ class TrainConfig:
 
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS = [
+    TrainConfig(
+        name="pi05_engram_multi",
+        model=pi0_config.Pi0Config(
+            pi05=True, action_dim=64, action_horizon=64, max_token_len=320,
+            action_head_names=("dex_w1_gripper", "dex_w1_linker_l6", "dex_w1_linker_l20",
+                               "galbot_inspire_rh56dfx_hand"),
+        ),
+        data=EngramMultiDataConfig(),
+        weight_loader=weight_loaders.MultiEmbodimentCheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        batch_size=256,
+        gradient_accumulation_steps=16,
+        fsdp_devices=4,
+        num_train_steps=30_000,
+        save_interval=10_000,
+        keep_period=10_000,
+        checkpoint_completed_steps=True,
+        log_interval=10,
+        num_workers=8,
+        prefetch_factor=2,
+        policy_metadata={
+            "model": "pi05_engram_multi", "action_horizon": 64, "action_rate_hz": 30,
+            "action_format": "joint deltas during training; absolute joint and hand targets when served",
+            "camera_roles": ["head", "left_wrist", "right_wrist"],
+            "structured_prompt_probability": 0.5,
+        },
+    ),
     TrainConfig(
         name="pi05_engram_w1_sandwich",
         # 22 physical dimensions fit in the base model's native 32D action head.

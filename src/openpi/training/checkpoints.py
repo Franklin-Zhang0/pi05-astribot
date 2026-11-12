@@ -28,6 +28,28 @@ def _engram_video_contract(data_config):
     }
 
 
+def _engram_multi_contract(data_config, manifest):
+    from openpi.policies.engram_multi_policy import camera_size
+    from openpi.shared.engram_multi import ROUTES
+
+    return {
+        "format": "engram-multi-policy-v1",
+        "action_dim": 64,
+        "action_horizon": manifest["action_horizon"],
+        "action_head_names": manifest["action_head_names"],
+        "max_token_len": manifest["max_token_len"],
+        "routes": ROUTES,
+        "structured_prompt_probability": data_config.engram_multi_structured_probability,
+        "prompt_keys": ["instruction", "robot_type", "end_effector_type", "end_effector_state_available"],
+        "preserve_prompt_text": True,
+        "camera_sizes": {robot: {role: list(camera_size(robot, role))
+                                 for role in ("head", "left_wrist", "right_wrist")}
+                         for robot in ("dex_w1", "galbot")},
+        "video": _engram_video_contract(data_config),
+        "stats_sha256": manifest["stats_sha256"],
+    }
+
+
 def initialize_checkpoint_dir(
     checkpoint_dir: epath.Path | str, *, keep_period: int | None, overwrite: bool, resume: bool
 ) -> tuple[ocp.CheckpointManager, bool]:
@@ -82,6 +104,25 @@ def save_state(
     def save_assets(directory: epath.Path):
         # Save the normalization stats.
         data_config = data_loader.data_config()
+        if data_config.engram_multi_data_dir is not None:
+            destination = directory / data_config.asset_id
+            destination.mkdir(parents=True, exist_ok=True)
+            stats = epath.Path(data_config.engram_multi_stats_path).read_bytes()
+            manifest_bytes = epath.Path(data_config.engram_multi_manifest_path).read_bytes()
+            if (hashlib.sha256(stats).hexdigest() != data_config.engram_multi_stats_sha256
+                    or hashlib.sha256(manifest_bytes).hexdigest() != data_config.engram_multi_manifest_sha256):
+                raise ValueError("Multi-embodiment statistics/provenance changed while the trainer was running")
+            manifest = json.loads(manifest_bytes)
+            if manifest.get("stats_sha256") != hashlib.sha256(stats).hexdigest():
+                raise ValueError("Typed checkpoint statistics differ from their provenance")
+            (destination / "engram_multi_stats.json").write_bytes(stats)
+            (destination / "engram_multi_manifest.json").write_bytes(manifest_bytes)
+            (destination / "engram_multi_contract.json").write_text(
+                json.dumps(_engram_multi_contract(data_config, manifest), indent=2) + "\n"
+            )
+            prompts = sorted({prompt for values in manifest.get("prompts_by_route", {}).values() for prompt in values})
+            (destination / "prompt.json").write_text(json.dumps(prompts, ensure_ascii=False, indent=2) + "\n")
+            return
         norm_stats = data_config.norm_stats
         if norm_stats is not None and data_config.asset_id is not None:
             _normalize.save(directory / data_config.asset_id, norm_stats)
@@ -113,6 +154,20 @@ def restore_state(
     step: int | None = None,
 ) -> training_utils.TrainState:
     data_config = data_loader.data_config()
+    if data_config.engram_multi_data_dir is not None:
+        restored_step = checkpoint_manager.latest_step() if step is None else step
+        if restored_step is None:
+            raise ValueError("No multi-embodiment checkpoint is available to resume")
+        saved = checkpoint_manager.directory / str(restored_step) / "assets" / data_config.asset_id
+        current_manifest = epath.Path(data_config.engram_multi_manifest_path).read_bytes()
+        current_stats = epath.Path(data_config.engram_multi_stats_path).read_bytes()
+        if ((saved / "engram_multi_manifest.json").read_bytes() != current_manifest
+                or (saved / "engram_multi_stats.json").read_bytes() != current_stats):
+            raise ValueError("Cannot resume with changed multi-embodiment statistics or source selection")
+        if json.loads((saved / "engram_multi_contract.json").read_text()) != _engram_multi_contract(
+            data_config, json.loads(current_manifest)
+        ):
+            raise ValueError("Cannot resume with changed multi-embodiment prompt, route, or camera contract")
     if data_config.engram_stats_manifest is not None:
         restored_step = checkpoint_manager.latest_step() if step is None else step
         if restored_step is None:

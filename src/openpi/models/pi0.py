@@ -97,7 +97,15 @@ class Pi0(_model.BaseModel):
         )
         img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
-        self.action_in_proj = nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
+        self.action_head_names = config.action_head_names
+        self.action_expert_width = action_expert_config.width
+        if self.action_head_names:
+            self.action_in_projs = nnx.Dict({
+                name: nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
+                for name in self.action_head_names
+            })
+        else:
+            self.action_in_proj = nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
         if config.pi05:
             self.time_mlp_in = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
             self.time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
@@ -105,10 +113,38 @@ class Pi0(_model.BaseModel):
             self.state_proj = nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
             self.action_time_mlp_in = nnx.Linear(2 * action_expert_config.width, action_expert_config.width, rngs=rngs)
             self.action_time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
-        self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
-
+        if self.action_head_names:
+            self.action_out_projs = nnx.Dict({
+                name: nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
+                for name in self.action_head_names
+            })
+        else:
+            self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
+
+    def _project_actions(self, values, observation, *, output=False):
+        """Apply the selected projection independently to every batch row."""
+        names = getattr(self, "action_head_names", ())
+        if not names:
+            return self.action_out_proj(values) if output else self.action_in_proj(values)
+        if observation.action_mask is None:
+            raise ValueError("Multi-embodiment projection requires action_mask")
+        if observation.action_mask.shape != (*values.shape[:-2], self.action_dim):
+            raise ValueError("action_mask must cover every packed action dimension for each batch row")
+        route = observation.embodiment_id
+        if route is None:
+            raise ValueError("Multi-embodiment projection requires embodiment_id")
+        if route.shape != values.shape[:-2] or not jnp.issubdtype(route.dtype, jnp.integer):
+            raise ValueError("embodiment_id must be an integer with one value per batch row")
+        heads = self.action_out_projs if output else self.action_in_projs
+        candidates = jnp.stack([heads[name](values) for name in names], axis=-2)
+        selector = jax.nn.one_hot(route, len(names), dtype=candidates.dtype)
+        selected = jnp.sum(candidates * selector[..., None, :, None], axis=-2)
+        # Invalid dynamic ids fail the finite-loss/inference gates rather than
+        # silently clipping or wrapping to another robot's projection.
+        valid = (route >= 0) & (route < len(names))
+        return jnp.where(valid[..., None, None], selected, jnp.nan)
 
     @at.typecheck
     def embed_prefix(
@@ -164,9 +200,9 @@ class Pi0(_model.BaseModel):
             # image/language inputs do not attend to state or actions
             ar_mask += [True]
 
-        action_tokens = self.action_in_proj(noisy_actions)
+        action_tokens = self._project_actions(noisy_actions, obs)
         # embed timestep using sine-cosine positional encoding with sensitivity in the range [0, 1]
-        time_emb = posemb_sincos(timestep, self.action_in_proj.out_features, min_period=4e-3, max_period=4.0)
+        time_emb = posemb_sincos(timestep, self.action_expert_width, min_period=4e-3, max_period=4.0)
         if self.pi05:
             # time MLP (for adaRMS)
             time_emb = self.time_mlp_in(time_emb)
@@ -201,6 +237,12 @@ class Pi0(_model.BaseModel):
         observation = _preprocess_observation(preprocess_rng, observation, train=train)
 
         batch_shape = actions.shape[:-2]
+        action_mask = observation.action_mask
+        if action_mask is not None:
+            # A missing target may be NaN in an external caller. Mask it before
+            # interpolation and subtraction so zero loss weights cannot multiply
+            # NaNs or leak unavailable labels into the expert inputs.
+            actions = jnp.where(action_mask[..., None, :], actions, 0.0)
         noise = jax.random.normal(noise_rng, actions.shape)
         time = jax.random.beta(time_rng, 1.5, 1, batch_shape) * 0.999 + 0.001
         time_expanded = time[..., None, None]
@@ -210,7 +252,6 @@ class Pi0(_model.BaseModel):
         # Missing labels must neither be trained toward a fabricated target
         # nor leak a fabricated clean action into the expert input. Keep their
         # input as independent noise and exclude their output from the loss.
-        action_mask = observation.action_mask
         if action_mask is not None:
             x_t = jnp.where(action_mask[..., None, :], x_t, noise)
 
@@ -224,7 +265,7 @@ class Pi0(_model.BaseModel):
         (prefix_out, suffix_out), _ = self.PaliGemma.llm(
             [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions, adarms_cond=[None, adarms_cond]
         )
-        v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
+        v_t = Pi0._project_actions(self, suffix_out[:, -self.action_horizon :], observation, output=True)
 
         per_dim_loss = jnp.square(v_t - u_t)
         if action_mask is None:
@@ -285,7 +326,11 @@ class Pi0(_model.BaseModel):
                 adarms_cond=[None, adarms_cond],
             )
             assert prefix_out is None
-            v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
+            v_t = Pi0._project_actions(self, suffix_out[:, -self.action_horizon :], observation, output=True)
+            if getattr(self, "action_head_names", ()) and observation.action_mask is not None:
+                # Missing/padded dimensions remain the same independent noise
+                # throughout denoising, matching the training input contract.
+                v_t = jnp.where(observation.action_mask[..., None, :], v_t, 0.0)
 
             return x_t + dt * v_t, time + dt
 
@@ -295,4 +340,6 @@ class Pi0(_model.BaseModel):
             return time >= -dt / 2
 
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
+        if getattr(self, "action_head_names", ()) and observation.action_mask is not None:
+            x_0 = jnp.where(observation.action_mask[..., None, :], x_0, 0.0)
         return x_0
