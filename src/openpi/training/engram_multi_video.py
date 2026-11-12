@@ -121,9 +121,58 @@ def validate_proxy(
     return record
 
 
+def _source_identity(stream) -> dict:
+    context = stream.codec_context
+    return {
+        "codec_id": int(context.codec.id),
+        "width": stream.width,
+        "height": stream.height,
+        "time_base_num": stream.time_base.numerator,
+        "time_base_den": stream.time_base.denominator,
+        "extradata_sha256": hashlib.sha256(context.extradata or b"").hexdigest(),
+    }
+
+
+def probe_source_media(original: Path) -> dict:
+    """Read CPU demux headers without decoding or traversing the video packets.
+
+    NVDEC can replace the software pixel format with ``cuda`` before decoding.
+    Keep the original format and declared color range from a separate header
+    probe, so the hardware context cannot change how colors are interpreted.
+    """
+    with av.open(str(original)) as source:
+        if not source.streams.video:
+            raise ValueError(f"No source video stream: {original}")
+        stream = source.streams.video[0]
+        context = stream.codec_context
+        metadata = {
+            **_source_identity(stream),
+            "codec": context.name,
+            "pixel_format": context.format.name if context.format is not None else None,
+            "declared_color_range": int(context.color_range),
+        }
+    declared = metadata["declared_color_range"]
+    if declared in (1, 2):
+        metadata.update(color_range=declared, color_range_basis="explicit_stream_metadata")
+    elif declared == 0 and metadata["codec"] == "h264" and metadata["pixel_format"] in {"yuv420p", "nv12"}:
+        # H.264 4:2:0 YUV without full_range VUI uses studio/limited range.
+        metadata.update(color_range=1, color_range_basis="h264_unspecified_yuv420_limited_default")
+    else:
+        raise ValueError(f"Cannot establish source camera color range: {original}; source_media={metadata}")
+    return metadata
+
+
+def _check_source_media(metadata: dict, stream, original: Path) -> int:
+    identity = _source_identity(stream)
+    if any(metadata[key] != value for key, value in identity.items()):
+        raise ValueError(f"Source media headers changed after the CPU probe: {original}")
+    return metadata["color_range"]
+
+
 def _encode(original: Path, output: Path, robot_type: str, role: str, *, crf: int, decoder: str, cuda_device: str):
     if decoder not in ("pyav_cpu", "nvdec"):
         raise ValueError("Decoder must be pyav_cpu or nvdec")
+    source_media = probe_source_media(original)
     hw = None
     if decoder == "nvdec":
         from av.codec.hwaccel import HWAccel
@@ -138,12 +187,7 @@ def _encode(original: Path, output: Path, robot_type: str, role: str, *, crf: in
     ):
         stream = source.streams.video[0]
         stream.codec_context.thread_count = 1
-        color_range = int(stream.codec_context.color_range)
-        if color_range == 0 and stream.codec_context.format.name in {"yuv420p", "nv12"}:
-            # H.264 YUV without a full_range VUI uses studio/limited range.
-            color_range = 1
-        if color_range not in (1, 2):
-            raise ValueError("Cannot establish source camera color range")
+        color_range = _check_source_media(source_media, stream, original)
         out = target.add_stream(
             "libx264",
             rate=30,
@@ -192,6 +236,7 @@ def _encode(original: Path, output: Path, robot_type: str, role: str, *, crf: in
             raise ValueError("No source video frames decoded")
         for packet in out.encode():
             target.mux(packet)
+    return source_media
 
 
 def create_proxy(
@@ -232,7 +277,7 @@ def create_proxy(
     os.close(fd)
     temporary = Path(name)
     try:
-        _encode(original, temporary, robot_type, role, crf=crf, decoder=decoder, cuda_device=cuda_device)
+        source_media = _encode(original, temporary, robot_type, role, crf=crf, decoder=decoder, cuda_device=cuda_device)
         timing = verify_proxy(original, temporary, robot_type, role, episode_rows)
         record = {
             "version": PROXY_VERSION,
@@ -241,6 +286,7 @@ def create_proxy(
             "source_relative": str(original.relative_to(root)),
             "source_bytes": original.stat().st_size,
             "source_sha256": sha256(original),
+            "source_media": source_media,
             "proxy_bytes": temporary.stat().st_size,
             "proxy_sha256": sha256(temporary),
             "crf": crf,

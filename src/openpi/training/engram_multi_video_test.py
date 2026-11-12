@@ -46,6 +46,9 @@ def test_proxy_preserves_timing_and_geometry(tmp_path, robot, role, width, heigh
     destination = tmp_path / "original_640.mp4"
     rows = [(0, timestamps, 0.0)]
     record = video.create_proxy(original, destination, tmp_path, robot, role, rows)
+    assert record["source_media"]["color_range"] == color_range
+    assert record["source_media"]["width"] == width
+    assert record["source_media"]["height"] == height
     assert record["timing"]["max_pts_error_us"] <= 1
     assert record["timing"]["max_gop"] <= 4
     size = camera_size(robot, role)
@@ -89,3 +92,87 @@ def test_dataset_cached_decoder_seeks_repeatedly_without_stale_frames(tmp_path):
         assert len(dataset._video_cache) == 1  # noqa: SLF001
     finally:
         dataset.close()
+
+
+@pytest.mark.parametrize(("declared", "expected"), [(0, 1), (1, 1), (2, 2)])
+def test_cpu_header_probe_preserves_range_when_hardware_format_becomes_cuda(monkeypatch, declared, expected):
+    from types import SimpleNamespace
+
+    software_context = SimpleNamespace(
+        codec=SimpleNamespace(id=27),
+        name="h264",
+        format=SimpleNamespace(name="yuv420p"),
+        color_range=declared,
+        extradata=b"original h264 headers",
+    )
+    software_stream = SimpleNamespace(
+        codec_context=software_context, width=1280, height=960, time_base=Fraction(1, 1000000)
+    )
+    calls = []
+
+    class HeaderOnlyContainer:
+        streams = SimpleNamespace(video=[software_stream])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def decode(self, *args, **kwargs):
+            pytest.fail("The color probe must not decode video frames")
+
+        def demux(self, *args, **kwargs):
+            pytest.fail("The color probe must not traverse video packets")
+
+    def open_header(path, **kwargs):
+        assert "hwaccel" not in kwargs
+        calls.append(path)
+        return HeaderOnlyContainer()
+
+    monkeypatch.setattr(video.av, "open", open_header)
+    original = "galbot_source.mp4"
+    metadata = video.probe_source_media(original)
+    assert metadata["declared_color_range"] == declared
+    assert metadata["color_range"] == expected
+    assert metadata["pixel_format"] == "yuv420p"
+    hardware_context = SimpleNamespace(
+        codec=SimpleNamespace(id=27),
+        format=SimpleNamespace(name="cuda"),
+        color_range=0,
+        extradata=software_context.extradata,
+    )
+    hardware_stream = SimpleNamespace(
+        codec_context=hardware_context, width=1280, height=960, time_base=software_stream.time_base
+    )
+    assert video._check_source_media(metadata, hardware_stream, original) == expected  # noqa: SLF001
+    assert calls == [original]
+    hardware_stream.width = 640
+    with pytest.raises(ValueError, match="headers changed.*galbot_source.mp4"):
+        video._check_source_media(metadata, hardware_stream, original)  # noqa: SLF001
+
+
+def test_unknown_cpu_pixel_format_fails_with_original_path(monkeypatch):
+    from types import SimpleNamespace
+
+    context = SimpleNamespace(
+        codec=SimpleNamespace(id=27),
+        name="h264",
+        format=SimpleNamespace(name="cuda"),
+        color_range=0,
+        extradata=b"headers",
+    )
+    stream = SimpleNamespace(codec_context=context, width=1280, height=960, time_base=Fraction(1, 1000000))
+
+    class HeaderOnlyContainer:
+        streams = SimpleNamespace(video=[stream])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(video.av, "open", lambda *args, **kwargs: HeaderOnlyContainer())
+    with pytest.raises(ValueError, match="Cannot establish source camera color range: ambiguous_original.mp4"):
+        video.probe_source_media("ambiguous_original.mp4")
