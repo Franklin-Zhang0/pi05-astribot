@@ -10,6 +10,20 @@ from openpi.policies.engram_multi_policy import camera_size
 from openpi.training import engram_multi_video as video
 
 
+def test_external_proxy_paths_separate_same_named_exports(tmp_path):
+    roots = [tmp_path / group / "same_export" / "trainable" for group in ("upload_a", "upload_b")]
+    originals = [root / "videos/head/chunk-000/file-000.mp4" for root in roots]
+    destinations = [
+        video.proxy_path(root, original, tmp_path / "local") for root, original in zip(roots, originals, strict=True)
+    ]
+    assert destinations[0] != destinations[1]
+    for root, original, destination in zip(roots, originals, destinations, strict=True):
+        assert destination.is_relative_to(tmp_path / "local")
+        assert destination.name == "file-000_640.mp4"
+        assert video.proxy_path(root, original) == original.with_name("file-000_640.mp4")
+        assert video.proxy_path(root, original, tmp_path / "local") == destination
+
+
 def make_video(path, width, height, color_range):
     pts = np.array([0, 33333, 66666, 100001, 133333, 166667, 200000, 233333, 266667, 300000])
     with av.open(str(path), "w", options={"video_track_timescale": "1000000"}) as container:

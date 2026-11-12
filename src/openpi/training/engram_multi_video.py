@@ -31,7 +31,12 @@ def proxy_path(root: str | Path, original: str | Path, proxy_root: str | Path | 
     root, original = Path(root), Path(original)
     relative = original.relative_to(root)
     relative = relative.with_name(relative.stem + "_640.mp4")
-    return original.with_name(relative.name) if proxy_root is None else Path(proxy_root) / root.parent.name / relative
+    if proxy_root is None:
+        return original.with_name(relative.name)
+    # Export basenames can repeat across upload groups. Bind local copies to the
+    # full source root so different recordings never share a destination.
+    source_key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
+    return Path(proxy_root) / f"{root.parent.name}-{source_key}" / relative
 
 
 def sidecar_path(proxy: str | Path) -> Path:
