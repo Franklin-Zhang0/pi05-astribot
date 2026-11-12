@@ -62,16 +62,7 @@ def read_manifest(path: str | Path) -> dict:
     return value
 
 
-def stats_identity(
-    manifest_path: str | Path,
-    split: str,
-    action_horizon: int,
-    prune_threshold_rad: float,
-    hand_threshold_percent: float,
-) -> dict:
-    """Bind normalization to exact source metadata and explicit episode selection."""
-    path = Path(manifest_path)
-    spec = read_manifest(path)
+def _source_provenance(spec: dict) -> list[dict]:
     sources = []
     for source in spec["sources"]:
         if not source["selected_episode_indices"]:
@@ -98,7 +89,22 @@ def stats_identity(
                 "data_size_inventory_sha256": inventory.hexdigest(),
             }
         )
-    return {
+    return sources
+
+
+def stats_identity(
+    manifest_path: str | Path,
+    split: str,
+    action_horizon: int,
+    prune_threshold_rad: float,
+    hand_threshold_percent: float,
+    *,
+    audit_source_metadata: bool = True,
+) -> dict:
+    """Bind the recipe to its manifest; optionally audit source metadata once."""
+    path = Path(manifest_path)
+    spec = read_manifest(path)
+    identity = {
         "contract": STATS_CONTRACT,
         "format": MANIFEST_FORMAT,
         "split": "train" if split == "val" else split,
@@ -110,8 +116,11 @@ def stats_identity(
         "hand_availability": "finite_current_feedback_and_full_horizon_position_targets_v1",
         "source_manifest_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "source_spec": spec,
-        "sources": sources,
     }
+
+    if audit_source_metadata:
+        identity["sources"] = _source_provenance(spec)
+    return identity
 
 
 def check_stats_identity(
@@ -123,10 +132,18 @@ def check_stats_identity(
     hand_threshold_percent: float,
     *,
     allow_sampled_stats: bool = False,
+    audit_source_metadata: bool = False,
 ) -> None:
     p = Path(stats_manifest_path)
     saved = json.loads(p.read_text())
-    expected = stats_identity(manifest_path, split, action_horizon, prune_threshold_rad, hand_threshold_percent)
+    expected = stats_identity(
+        manifest_path,
+        split,
+        action_horizon,
+        prune_threshold_rad,
+        hand_threshold_percent,
+        audit_source_metadata=audit_source_metadata,
+    )
     if any(saved.get(k) != v for k, v in expected.items()):
         raise ValueError("Multi-embodiment statistics differ from source/split/transform identity")
     filename = saved.get("stats_filename", "engram_multi_stats.json")
@@ -202,7 +219,7 @@ class EngramMultiEmbodimentDataset:
         video_tolerance_s: float = 0.0001,
         max_gap_s: float = 0.25,
         video_cache_size: int = 8,
-        verify_proxy_hash: bool = True,
+        verify_proxy_hash: bool = False,
     ):
         if split not in ("train", "val", "all") or video_mode not in ("original", "proxy_640"):
             raise ValueError("Invalid dataset split or video mode")

@@ -152,6 +152,7 @@ def create_torch_dataset(
             decode_images=data_config.engram_decode_images,
             video_mode=data_config.engram_video_mode,
             proxy_root=data_config.engram_proxy_root,
+            verify_proxy_hash=data_config.engram_multi_verify_proxy_hash,
         )
 
     if data_config.engram_data_dir is not None:
@@ -356,6 +357,7 @@ def create_torch_data_loader(
             data_config.engram_prune_threshold_rad,
             data_config.engram_gripper_threshold_percent,
             allow_sampled_stats=data_config.engram_allow_sampled_stats,
+            audit_source_metadata=data_config.engram_multi_audit_source_metadata,
         )
         manifest = json.loads(pathlib.Path(data_config.engram_multi_manifest_path).read_text())
         if (manifest.get("max_token_len") != model_config.max_token_len

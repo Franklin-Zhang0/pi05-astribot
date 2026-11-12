@@ -106,6 +106,8 @@ class DataConfig:
     engram_multi_stats_sha256: str | None = None
     engram_multi_manifest_sha256: str | None = None
     engram_multi_structured_probability: float = 0.5
+    engram_multi_verify_proxy_hash: bool = False
+    engram_multi_audit_source_metadata: bool = False
     engram_split: Literal["all", "train", "val"] = "all"
     engram_prune_threshold_rad: float = 0.01
     engram_gripper_threshold_percent: float = 0.0
@@ -318,6 +320,9 @@ class EngramMultiDataConfig(DataConfigFactory):
     hand_threshold_percent: float = 0.0
     structured_prompt_probability: float = 0.5
     allow_sampled_stats: bool = False
+    # Explicit integrity audit; normal startup uses sidecars and manifest identity.
+    verify_proxy_hash: bool = False
+    audit_source_metadata: bool = False
     video_mode: Literal["original", "proxy_640"] = "proxy_640"
     proxy_root: str | None = None
 
@@ -360,6 +365,8 @@ class EngramMultiDataConfig(DataConfigFactory):
             engram_multi_manifest_sha256=(hashlib.sha256(manifest_path.read_bytes()).hexdigest()
                                           if manifest_path.is_file() else None),
             engram_multi_structured_probability=self.structured_prompt_probability,
+            engram_multi_verify_proxy_hash=self.verify_proxy_hash,
+            engram_multi_audit_source_metadata=self.audit_source_metadata,
             engram_split=self.split,
             engram_prune_threshold_rad=self.prune_threshold_rad,
             engram_gripper_threshold_percent=self.hand_threshold_percent,

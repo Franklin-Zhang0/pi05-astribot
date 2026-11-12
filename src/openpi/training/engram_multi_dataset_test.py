@@ -313,3 +313,108 @@ def test_saved_statistics_require_full_route_and_anchor_coverage(mixed_manifest,
     with pytest.raises(ValueError, match="diagnostic"):
         check(sampled)
     check(sampled, allow_sampled_stats=True)
+
+
+def test_stats_startup_skips_source_reads_but_retains_manifest_and_opt_in_audit(mixed_manifest, tmp_path, monkeypatch):
+    import hashlib
+
+    dataset = multi.EngramMultiEmbodimentDataset(mixed_manifest, 3, decode_images=False)
+    stats, counts = multi.compute_training_stats(dataset, seed=0)
+    stats_file = tmp_path / "engram_multi_stats.json"
+    save_route_stats(stats_file, stats)
+    identity = multi.stats_identity(mixed_manifest, "train", 3, 0.01, 0.0)
+    assert len(identity["sources"]) == 4  # Generation still performs the complete audit once.
+    identity.update(
+        counts,
+        sampled_anchors=counts["used_anchors"],
+        max_frames=None,
+        stats_filename=stats_file.name,
+        stats_sha256=hashlib.sha256(stats_file.read_bytes()).hexdigest(),
+    )
+    provenance = tmp_path / "engram_multi_manifest.json"
+    provenance.write_text(json.dumps(identity))
+    source_roots = [Path(source["root"]) for source in identity["source_spec"]["sources"]]
+    original_read = Path.read_bytes
+    reads = []
+
+    def guarded_read(path):
+        if any(path.is_relative_to(root) for root in source_roots):
+            raise AssertionError("Startup unexpectedly reread source metadata")
+        reads.append(path)
+        return original_read(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_bytes", guarded_read)
+        multi.check_stats_identity(provenance, mixed_manifest, "train", 3, 0.01, 0.0)
+        assert mixed_manifest in reads
+        assert stats_file in reads
+        with pytest.raises(AssertionError, match="reread source"):
+            multi.check_stats_identity(provenance, mixed_manifest, "train", 3, 0.01, 0.0, audit_source_metadata=True)
+    # Explicit audits still detect changed source metadata; ordinary startup only
+    # checks the exact pinned source manifest and transform, then runtime schemas.
+    info_file = source_roots[0] / "meta/info.json"
+    info = json.loads(info_file.read_text())
+    info["audit_test_annotation"] = "changed after statistics generation"
+    info_file.write_text(json.dumps(info))
+    multi.check_stats_identity(provenance, mixed_manifest, "train", 3, 0.01, 0.0)
+    with pytest.raises(ValueError, match="source/split/transform"):
+        multi.check_stats_identity(provenance, mixed_manifest, "train", 3, 0.01, 0.0, audit_source_metadata=True)
+    with pytest.raises(ValueError, match="source/split/transform"):
+        multi.check_stats_identity(provenance, mixed_manifest, "train", 4, 0.01, 0.0)
+    mixed_manifest.write_text(mixed_manifest.read_text() + "\n")
+    with pytest.raises(ValueError, match="source/split/transform"):
+        multi.check_stats_identity(provenance, mixed_manifest, "train", 3, 0.01, 0.0)
+
+
+def test_proxy_startup_skips_payload_reads_unless_full_hash_requested(mixed_manifest, monkeypatch):
+    from openpi.training import engram_multi_video as video
+
+    spec = json.loads(mixed_manifest.read_text())
+    for source in spec["sources"]:
+        root = Path(source["root"])
+        for role, camera in multi.CAMERAS[source["robot_type"]].items():
+            original = root / f"videos/observation.images.{camera}/chunk-000/file-000.mp4"
+            if not original.exists():
+                continue
+            proxy = video.proxy_path(root, original)
+            proxy.write_bytes(b"unchecked video payload")
+            width, height = multi.camera_size(source["robot_type"], role)
+            record = {
+                "version": video.PROXY_VERSION,
+                "robot_type": source["robot_type"],
+                "camera_role": role,
+                "source_relative": str(original.relative_to(root)),
+                "source_bytes": original.stat().st_size,
+                "proxy_bytes": proxy.stat().st_size,
+                "proxy_sha256": "f" * 64,
+                "timing": {
+                    "proxy": {"width": width, "height": height, "color_range": 2},
+                    "max_gop": 4,
+                    "max_pts_error_us": 0,
+                    "episodes": [{"episode_index": i, "rows": 8} for i in range(2)],
+                },
+            }
+            video.sidecar_path(proxy).write_text(json.dumps(record))
+    original_open = Path.open
+    audited = False
+    payload_reads = []
+
+    def guarded_open(path, *args, **kwargs):
+        if path.suffix == ".mp4":
+            if not audited:
+                raise AssertionError("Default startup read a video payload")
+            payload_reads.append(path)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", guarded_open)
+    dataset = multi.EngramMultiEmbodimentDataset(mixed_manifest, 3, decode_images=False, video_mode="proxy_640")
+    assert len(dataset) == 24
+    assert dataset.video_identity is not None
+    dataset.close()
+    assert payload_reads == []
+    audited = True
+    with pytest.raises(ValueError, match="payload checksum"):
+        multi.EngramMultiEmbodimentDataset(
+            mixed_manifest, 3, decode_images=False, video_mode="proxy_640", verify_proxy_hash=True
+        )
+    assert len(payload_reads) == 1

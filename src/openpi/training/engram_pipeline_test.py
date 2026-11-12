@@ -92,3 +92,38 @@ def test_configured_parquet_loader_forwards_routes_masks_and_token_state(tmp_pat
                 data_config, model_config, 3, len(raw), num_workers=0, num_batches=1,
             )
     manifest_file.write_text(json.dumps(identity))
+
+
+def test_multi_startup_audit_flags_propagate_from_recipe_to_loader(tmp_path, monkeypatch):
+    token_model = Path("/tmp/engram-openpi-cache/big_vision/paligemma_tokenizer.model")
+    if not token_model.is_file():
+        pytest.skip("Cached PaliGemma sentencepiece model is unavailable")
+    monkeypatch.setattr(tokenizer.download, "maybe_download", lambda *_a, **_kw: token_model)
+    recipe = config.get_config("pi05_engram_multi")
+    assert not recipe.data.verify_proxy_hash
+    assert not recipe.data.audit_source_metadata
+    for enabled in (False, True):
+        factory = dataclasses.replace(recipe.data, verify_proxy_hash=enabled, audit_source_metadata=enabled)
+        data_config = factory.create(tmp_path / "assets", recipe.model)
+        assert data_config.engram_multi_verify_proxy_hash is enabled
+        assert data_config.engram_multi_audit_source_metadata is enabled
+        captured = {}
+
+        def create_dataset(*args, _captured=captured, **kwargs):
+            _captured.update(kwargs)
+            return "dataset created"
+
+        monkeypatch.setattr(multi, "EngramMultiEmbodimentDataset", create_dataset)
+        assert data_loader.create_torch_dataset(data_config, 64, recipe.model) == "dataset created"
+        assert captured["verify_proxy_hash"] is enabled
+
+        def check_identity(*args, _captured=captured, **kwargs):
+            _captured.update(kwargs)
+            raise RuntimeError("identity check reached")
+
+        monkeypatch.setattr(multi, "check_stats_identity", check_identity)
+        with pytest.raises(RuntimeError, match="identity check reached"):
+            data_loader.create_torch_data_loader(
+                dataclasses.replace(data_config, norm_stats={}), recipe.model, 64, 256, num_workers=0
+            )
+        assert captured["audit_source_metadata"] is enabled
