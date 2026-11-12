@@ -41,7 +41,9 @@ W1 joint order is `ANKLE, KNEE, BUTTOCK, WAIST, NECK1, NECK2, LEFT_J1–LEFT_J7,
 
 Training uses the W1 stereo camera's **left eye**, resized to 640×360; Galbot uses its left head camera at 480×360, preserving its 4:3 aspect ratio. W1 wrists stay 640×480 and Galbot wrists stay 640×360. The final model transform letterboxes every camera to 224×224. Absent wrist cameras are zero-filled with attention masks. Only these needed camera streams are preprocessed. Proxies are adjacent `*_640.mp4` files with a maximum four-frame GOP; preprocessing verifies original timestamps, frame counts, geometry and source/proxy hashes and saves sidecars. Original videos remain unchanged.
 
-Training starts without repeating video checksum scans or source provenance audits. It uses the prepared sidecars and normalization assets, retaining lightweight schema and training-contract checks. Reading annotations and selecting valid action chunks still happens at startup. This fast startup is the default for future runs; the approximately 5% validation split is unchanged. For an explicit dataset audit, add `--data.verify-proxy-hash --data.audit-source-metadata` to the training command.
+Training starts without repeating video checksum scans or source provenance audits. It uses the prepared sidecars and normalization assets, retaining lightweight schema and training-contract checks. This fast startup is the default for future runs; the approximately 5% validation split is unchanged. For an explicit dataset audit, add `--data.verify-proxy-hash --data.audit-source-metadata` to the training command.
+
+The multi-embodiment recipe caches its prepared annotations in `/tmp/openpi-engram-prepared-index`. The first launch on a node builds the index once; subsequent launches reuse it. Spawned workers open the same read-only arrays instead of receiving full dataset copies. The cache preserves the original frame timelines, action chunks and masks. A changed source manifest, loader implementation or sampling setting selects a new cache. Use `--data.prepared-index-dir /path/on/local/disk` to choose another local directory, or `--data.rebuild-prepared-index` after changing annotations in place. Explicit integrity audits also rebuild the cache. Shared AOSS, FUSE and network mounts cannot host the memory-mapped index.
 
 ```bash
 # From the repository root, after uv sync:
@@ -51,12 +53,12 @@ uv run examples/engram/preprocess_multi.py examples/engram/kitchen_multi_2026111
 export ENGRAM_ASSETS_DIR=/path/to/run/assets
 bash examples/engram/finetune_multi_pi05.sh stats --batch-size 256 --num-workers 0
 bash examples/engram/finetune_multi_pi05.sh train my-engram-multi \
-  --batch-size 256 --num-train-steps 30000 --save-interval 10000 --keep-period 10000 \
-  --fsdp-devices 4 --gradient-accumulation-steps 16 --checkpoint-completed-steps \
+  --batch-size 128 --num-train-steps 30000 --save-interval 10000 --keep-period 10000 \
+  --fsdp-devices 4 --gradient-accumulation-steps 2 --checkpoint-completed-steps \
   --checkpoint-dir-override /hand_keypoint_data/engram_data/ckpt/pi05/DATE_EXPNAME
 ```
 
-The default global batch is 256: 16 accumulated global microbatches of 16 samples, four samples per GPU on four GPUs. Statistics require the full retained training split; sampled diagnostic statistics are rejected by production training and serving. Validation packages never contribute statistics or training samples. The checkpoint includes its exact statistics, source provenance, route/camera/prompt contract and original training instruction list (`assets/engram/multi_embodiment_train/prompt.json`). Resume rejects changed contracts.
+The default global batch is 128: two accumulated global microbatches of 64 samples, 16 samples per GPU on four GPUs. Statistics require the full retained training split; sampled diagnostic statistics are rejected by production training and serving. Validation packages never contribute statistics or training samples. The checkpoint includes its exact statistics, source provenance, route/camera/prompt contract and original training instruction list (`assets/engram/multi_embodiment_train/prompt.json`). Resume rejects changed contracts.
 
 ### Multi-embodiment inference
 

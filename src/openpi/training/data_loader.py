@@ -153,6 +153,9 @@ def create_torch_dataset(
             video_mode=data_config.engram_video_mode,
             proxy_root=data_config.engram_proxy_root,
             verify_proxy_hash=data_config.engram_multi_verify_proxy_hash,
+            prepared_index_dir=data_config.engram_multi_prepared_index_dir,
+            rebuild_prepared_index=data_config.engram_multi_rebuild_prepared_index,
+            audit_source_metadata=data_config.engram_multi_audit_source_metadata,
         )
 
     if data_config.engram_data_dir is not None:

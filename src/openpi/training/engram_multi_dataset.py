@@ -220,6 +220,9 @@ class EngramMultiEmbodimentDataset:
         max_gap_s: float = 0.25,
         video_cache_size: int = 8,
         verify_proxy_hash: bool = False,
+        prepared_index_dir: str | Path | None = None,
+        rebuild_prepared_index: bool = False,
+        audit_source_metadata: bool = False,
     ):
         if split not in ("train", "val", "all") or video_mode not in ("original", "proxy_640"):
             raise ValueError("Invalid dataset split or video mode")
@@ -233,7 +236,7 @@ class EngramMultiEmbodimentDataset:
         ):
             raise ValueError("Motion thresholds must be finite and nonnegative")
         self.manifest_path = Path(manifest)
-        self.manifest = read_manifest(manifest)
+        self.manifest = None
         self.action_horizon = action_horizon
         self.split = split
         self.decode_images = decode_images
@@ -241,6 +244,61 @@ class EngramMultiEmbodimentDataset:
         self.video_tolerance_s = video_tolerance_s
         self.video_cache_size = video_cache_size
         self._video_cache = OrderedDict()
+        self._prepared_descriptor = None
+        build_kwargs = {
+            "split": split,
+            "action_horizon": action_horizon,
+            "video_mode": video_mode,
+            "proxy_root": proxy_root,
+            "prune_threshold_rad": prune_threshold_rad,
+            "hand_threshold_percent": hand_threshold_percent,
+            "max_gap_s": max_gap_s,
+            "verify_proxy_hash": verify_proxy_hash,
+        }
+        if prepared_index_dir is None:
+            self._build_episodes(**build_kwargs)
+            return
+        from openpi.training import engram_prepared_index as prepared
+
+        identity = {
+            "manifest_path": str(self.manifest_path.resolve()),
+            "source_roots": [
+                str(Path(source["root"]).resolve()) for source in json.loads(self.manifest_path.read_text())["sources"]
+            ],
+            "source_manifest_sha256": hashlib.sha256(self.manifest_path.read_bytes()).hexdigest(),
+            "loader_code_sha256": prepared.code_identity(),
+            "split": split,
+            "action_horizon": action_horizon,
+            "prune_threshold_rad": prune_threshold_rad,
+            "hand_threshold_percent": hand_threshold_percent,
+            "max_gap_s": max_gap_s,
+            "video_mode": video_mode,
+            "proxy_root": str(Path(proxy_root).expanduser().resolve()) if proxy_root is not None else None,
+            "video_tolerance_s": video_tolerance_s,
+        }
+        store = prepared.PreparedIndexStore(prepared_index_dir, identity)
+        force = rebuild_prepared_index or verify_proxy_hash or audit_source_metadata
+        if not force and self._try_prepared_index(store.current()):
+            return
+        with store.lock():
+            if not force and self._try_prepared_index(store.current()):
+                return
+            self._build_episodes(**build_kwargs)
+            self._restore_prepared_index(store.publish(self))
+
+    def _build_episodes(
+        self,
+        *,
+        split,
+        action_horizon,
+        video_mode,
+        proxy_root,
+        prune_threshold_rad,
+        hand_threshold_percent,
+        max_gap_s,
+        verify_proxy_hash,
+    ):
+        self.manifest = read_manifest(self.manifest_path)
         self.episodes = []
         self.invalid_anchors = self.short_horizon_anchors = self.static_anchors = 0
         self.source_counts = []
@@ -514,10 +572,94 @@ class EngramMultiEmbodimentDataset:
     def __len__(self):
         return int(self.offsets[-1])
 
+    def _try_prepared_index(self, descriptor):
+        if descriptor is None:
+            return False
+        from openpi.training.engram_prepared_index import InvalidPreparedIndexError
+
+        try:
+            self._restore_prepared_index(descriptor)
+            return True
+        except InvalidPreparedIndexError as error:
+            logging.warning("Rebuilding incomplete prepared Engram snapshot: %s", error)
+            return False
+
+    def _restore_prepared_index(self, descriptor):
+        from openpi.training.engram_prepared_index import InvalidPreparedIndexError
+        from openpi.training.engram_prepared_index import open_index
+
+        metadata, arrays = open_index(descriptor)
+        episodes = []
+        frame_end = anchor_end = 0
+        for entry in metadata["episodes"]:
+            if (
+                entry["frame_begin"] != frame_end
+                or entry["anchor_begin"] != anchor_end
+                or not frame_end < entry["frame_end"] <= metadata["frames"]
+                or not anchor_end <= entry["anchor_end"] <= metadata["anchors"]
+            ):
+                raise InvalidPreparedIndexError("Prepared episode offsets are not contiguous")
+            frames = slice(frame_end, entry["frame_end"])
+            anchors = slice(anchor_end, entry["anchor_end"])
+            mask = np.asarray(entry["action_mask"], dtype=bool)
+            if mask.shape != (ACTION_DIM,):
+                raise InvalidPreparedIndexError("Prepared episode action mask has an invalid shape")
+            mask.flags.writeable = False
+            episodes.append(
+                Episode(
+                    entry["source_id"],
+                    Path(entry["root"]),
+                    entry["episode_index"],
+                    entry["annotation_id"],
+                    entry["package_id"],
+                    entry["embodiment_id"],
+                    entry["fps"],
+                    arrays["timestamps"][frames],
+                    arrays["states"][frames],
+                    arrays["actions"][frames],
+                    arrays["task_indices"][frames],
+                    {int(key): value for key, value in entry["tasks"].items()},
+                    arrays["anchors"][anchors],
+                    mask,
+                    arrays["hand_available"][frames],
+                    {key: tuple(value) for key, value in entry["videos"].items()},
+                )
+            )
+            frame_end, anchor_end = entry["frame_end"], entry["anchor_end"]
+        offsets = np.asarray(metadata["offsets"], dtype=np.int64)
+        expected = np.cumsum([0, *[len(episode.anchors) for episode in episodes]], dtype=np.int64)
+        if (
+            frame_end != metadata["frames"]
+            or anchor_end != metadata["anchors"]
+            or not np.array_equal(offsets, expected)
+        ):
+            raise InvalidPreparedIndexError("Prepared episode coverage differs from array counts")
+        self.__dict__.update(metadata["state"])
+        self.episodes = episodes
+        self.offsets = offsets
+        self.offsets.flags.writeable = False
+        self._prepared_arrays = arrays
+        self._prepared_descriptor = descriptor
+        self._video_cache = OrderedDict()
+        logging.info("Loaded prepared Engram %s: %d episodes, %d anchors", self.split, len(episodes), len(self))
+
     def __getstate__(self):
+        if self._prepared_descriptor is not None:
+            runtime = {
+                key: getattr(self, key)
+                for key in ("manifest_path", "decode_images", "video_tolerance_s", "video_cache_size")
+            }
+            return {"_prepared_descriptor": self._prepared_descriptor, "_prepared_runtime": runtime}
         state = self.__dict__.copy()
         state["_video_cache"] = OrderedDict()
         return state
+
+    def __setstate__(self, state):
+        if "_prepared_runtime" in state:
+            self.__dict__.update(state["_prepared_runtime"])
+            self._restore_prepared_index(state["_prepared_descriptor"])
+        else:
+            self.__dict__.update(state)
 
     def close(self):
         for container in self._video_cache.values():
