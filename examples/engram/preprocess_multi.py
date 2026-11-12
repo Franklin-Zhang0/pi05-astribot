@@ -9,6 +9,8 @@ from concurrent.futures import as_completed
 import json
 import multiprocessing
 from pathlib import Path
+import sys
+import traceback
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -152,26 +154,36 @@ def main():
     try:
         context = multiprocessing.get_context("spawn")
         with ProcessPoolExecutor(max_workers=args.workers, mp_context=context) as pool:
-            futures = [
-                pool.submit(
-                    process,
-                    job,
-                    decoder=args.decoder,
-                    device=devices[i % len(devices)],
-                    scratch=args.scratch_root,
-                    crf=args.crf,
-                    verify_existing_source=args.verify_existing_source,
-                )
-                for i, job in enumerate(jobs)
-            ]
-            for i, future in enumerate(as_completed(futures), 1):
-                result = future.result()
-                result.update(event="PROXY_COMPLETE", completed=i, total=len(jobs))
-                line = json.dumps(result)
-                print(line, flush=True)
-                if stream:
-                    stream.write(line + "\n")
-                    stream.flush()
+            futures = []
+            try:
+                for i, job in enumerate(jobs):
+                    futures.append(
+                        pool.submit(
+                            process,
+                            job,
+                            decoder=args.decoder,
+                            device=devices[i % len(devices)],
+                            scratch=args.scratch_root,
+                            crf=args.crf,
+                            verify_existing_source=args.verify_existing_source,
+                        )
+                    )
+                for i, future in enumerate(as_completed(futures), 1):
+                    result = future.result()
+                    result.update(event="PROXY_COMPLETE", completed=i, total=len(jobs))
+                    line = json.dumps(result)
+                    print(line, flush=True)
+                    if stream:
+                        stream.write(line + "\n")
+                        stream.flush()
+            except BaseException:
+                # Report before __exit__ waits for active encoders, and prevent
+                # the remaining submission queue from continuing after failure.
+                traceback.print_exc()
+                sys.stderr.flush()
+                for future in futures:
+                    future.cancel()
+                raise
     finally:
         if stream:
             stream.close()
