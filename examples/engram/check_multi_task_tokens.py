@@ -59,7 +59,7 @@ def main():
     parser.add_argument(
         "--source-manifest", action="store_true", help="Conservatively include every selected-source task"
     )
-    parser.add_argument("--max-token-len", type=int, default=320)
+    parser.add_argument("--max-token-len", type=int, default=352)
     args = parser.parse_args()
     spec = json.loads(args.manifest.read_text())
     if args.source_manifest:

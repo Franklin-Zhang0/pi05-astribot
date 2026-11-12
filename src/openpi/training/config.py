@@ -724,7 +724,7 @@ _CONFIGS = [
     TrainConfig(
         name="pi05_engram_multi",
         model=pi0_config.Pi0Config(
-            pi05=True, action_dim=64, action_horizon=64, max_token_len=320,
+            pi05=True, action_dim=64, action_horizon=64, max_token_len=352,
             action_head_names=("dex_w1_gripper", "dex_w1_linker_l6", "dex_w1_linker_l20",
                                "galbot_inspire_rh56dfx_hand"),
         ),

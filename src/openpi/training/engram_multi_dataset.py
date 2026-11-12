@@ -107,6 +107,7 @@ def stats_identity(
         "hand_threshold_percent": hand_threshold_percent,
         "model_action_dim": ACTION_DIM,
         "route_names": list(ROUTE_NAMES),
+        "hand_availability": "finite_current_feedback_and_full_horizon_position_targets_v1",
         "source_manifest_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "source_spec": spec,
         "sources": sources,
@@ -134,7 +135,34 @@ def check_stats_identity(
         raise ValueError("Typed normalization file differs from its saved manifest")
     if saved.get("max_frames") is not None and not allow_sampled_stats:
         raise ValueError("Sampled statistics are diagnostic; fit full training statistics")
-    load_route_stats(stats)
+    routes = load_route_stats(stats)
+    used, sampled, total = (saved.get(key) for key in ("used_anchors", "sampled_anchors", "total_anchors"))
+    if any(type(count) is not int or count <= 0 for count in (used, sampled, total)):
+        raise ValueError("Statistics coverage requires positive integer anchor counts")
+    if used != sampled or used > total or (saved.get("max_frames") is None and used != total):
+        raise ValueError("Statistics coverage does not include all requested training anchors")
+    route_counts = saved.get("routes", {})
+    if set(route_counts) != set(ROUTE_NAMES):
+        raise ValueError("Statistics coverage omits an embodiment route")
+    for index, name in enumerate(ROUTE_NAMES):
+        count = route_counts[name]
+        anchors, hands = count.get("anchors"), count.get("labeled_hand_anchors")
+        if (
+            type(anchors) is not int
+            or anchors < 2
+            or type(hands) is not int
+            or not 0 <= hands <= anchors
+            or (index < 3 and hands < 2)
+            or (index == 3 and hands != 0)
+        ):
+            raise ValueError(f"Invalid route or hand-label statistics coverage for {name}")
+        if count != routes[name].counts:
+            raise ValueError("Saved normalization and provenance coverage counts disagree")
+        expected_mask = physical_mask(index, has_hand_labels=hands > 0)
+        if not np.array_equal(routes[name].supervised_dims, expected_mask):
+            raise ValueError("Normalization availability mask disagrees with measured label coverage")
+    if sum(count["anchors"] for count in route_counts.values()) != used:
+        raise ValueError("Statistics route counts do not sum to the retained anchor total")
 
 
 @dataclasses.dataclass
@@ -153,6 +181,7 @@ class Episode:
     tasks: dict[int, str]
     anchors: np.ndarray
     action_mask: np.ndarray
+    hand_available: np.ndarray
     videos: dict[str, tuple[str, float, bool]]
 
 
@@ -198,6 +227,7 @@ class EngramMultiEmbodimentDataset:
         self.episodes = []
         self.invalid_anchors = self.short_horizon_anchors = self.static_anchors = 0
         self.source_counts = []
+        self.missing_hand_anchors = dict.fromkeys(ROUTE_NAMES, 0)
         seen_annotations = set()
         seen_windows = set()
         video_identity = hashlib.sha256()
@@ -303,7 +333,10 @@ class EngramMultiEmbodimentDataset:
                 states[:, : route.joint_dim] = legacy._vector(table, legacy.STATE_KEY, route.joint_dim)
                 actions[:, : route.joint_dim] = legacy._vector(table, legacy.ACTION_KEY, route.joint_dim)
                 mask = physical_mask(index, has_hands)
+                hand_command_valid = np.zeros(n, dtype=bool)
+                hand_feedback_valid = np.zeros(n, dtype=bool)
                 if has_hands:
+                    hand_command_valid[:] = True
                     width = route.hand_dim // 2
                     for side, state_key, action_key, mode_key in (
                         (0, legacy.LEFT_STATE, legacy.LEFT_ACTION, legacy.LEFT_MODE),
@@ -312,25 +345,39 @@ class EngramMultiEmbodimentDataset:
                         offset = HAND_START + side * width
                         states[:, offset : offset + width] = legacy._vector(table, state_key, width)
                         actions[:, offset : offset + width] = legacy._vector(table, action_key, width)
-                        if np.any(legacy._vector(table, mode_key, 1) != 0):
-                            raise ValueError("End-effector action mode must be POSITION")
+                        modes = legacy._vector(table, mode_key, 1)[:, 0]
+                        if np.any(np.isfinite(modes) & (modes != 0)):
+                            raise ValueError(f"End-effector action mode must be POSITION: {root}, episode {episode_id}")
+                        hand_command_valid &= np.isfinite(modes)
                     lo = -100 if route.end_effector_type == "linker_l20" else 0
                     if np.any(
                         (actions[:, HAND_START : HAND_START + route.hand_dim] < lo)
                         | (actions[:, HAND_START : HAND_START + route.hand_dim] > 100)
                     ):
                         raise ValueError("End-effector targets outside their schema units")
-                if not np.isfinite(actions[:, mask]).all():
-                    raise ValueError("Nonfinite supervised action targets")
-                valid = np.isfinite(states[:, mask]).all(axis=1)
-                if has_hands:
+                    hand_command_valid &= np.isfinite(actions[:, HAND_START : HAND_START + route.hand_dim]).all(axis=1)
                     hand_state = states[:, HAND_START : HAND_START + route.hand_dim]
-                    lo = -100 if route.end_effector_type == "linker_l20" else 0
-                    valid &= np.all((hand_state >= lo) & (hand_state <= 100), axis=1)
+                    hand_feedback_valid = np.all(
+                        np.isfinite(hand_state) & (hand_state >= lo) & (hand_state <= 100), axis=1
+                    )
+                if not np.isfinite(actions[:, : route.joint_dim]).all():
+                    raise ValueError("Nonfinite supervised joint targets")
+                valid = np.isfinite(states[:, : route.joint_dim]).all(axis=1)
                 self.invalid_anchors += int((~valid).sum())
                 enough = timestamps + (action_horizon - 1) / fps <= timestamps[-1] + 1e-9
                 self.short_horizon_anchors += int(np.sum(valid & ~enough))
                 anchors = np.flatnonzero(valid & enough)
+                hand_available = np.zeros(n, dtype=bool)
+                if has_hands:
+                    for begin in range(0, len(anchors), 512):
+                        batch = anchors[begin : begin + 512]
+                        targets = timestamps[batch, None] + np.arange(action_horizon)[None, :] / fps
+                        right = np.minimum(np.maximum(np.searchsorted(timestamps, targets), batch[:, None]), n - 1)
+                        left = np.maximum(right - 1, batch[:, None])
+                        indices = np.where(
+                            np.abs(timestamps[left] - targets) <= np.abs(timestamps[right] - targets), left, right
+                        )
+                        hand_available[batch] = hand_feedback_valid[batch] & hand_command_valid[indices].all(axis=1)
                 if split != "val" and prune_threshold_rad > 0:
                     before = len(anchors)
                     anchors = legacy._moving_anchors(
@@ -342,8 +389,22 @@ class EngramMultiEmbodimentDataset:
                         fps,
                         prune_threshold_rad,
                         hand_threshold_percent,
-                        has_gripper=has_hands,
+                        has_gripper=False,
                     )
+                    if has_hands:
+                        available_anchors = np.flatnonzero(valid & enough & hand_available)
+                        hand_motion = legacy._moving_anchors(
+                            timestamps,
+                            states,
+                            actions,
+                            available_anchors,
+                            action_horizon,
+                            fps,
+                            prune_threshold_rad,
+                            hand_threshold_percent,
+                            has_gripper=True,
+                        )
+                        anchors = np.union1d(anchors, hand_motion)
                     self.static_anchors += before - len(anchors)
                 task_indices = np.asarray(table["task_index"], dtype=np.int64)
                 if not set(task_indices.tolist()).issubset(tasks):
@@ -401,6 +462,7 @@ class EngramMultiEmbodimentDataset:
                         tasks,
                         anchors,
                         mask,
+                        hand_available,
                         videos,
                     )
                 )
@@ -412,8 +474,12 @@ class EngramMultiEmbodimentDataset:
                     "embodiment_id": index,
                     "episodes": len(source_episodes),
                     "anchors": sum(len(e.anchors) for e in source_episodes),
+                    "missing_hand_anchors": sum(int((~e.hand_available[e.anchors]).sum()) for e in source_episodes),
                 }
             )
+            self.missing_hand_anchors[route.name] += self.source_counts[-1]["missing_hand_anchors"]
+            if len(self.source_counts) % 25 == 0:
+                logging.info("Read %d sources, %d selected episodes", len(self.source_counts), len(self.episodes))
         self.offsets = np.cumsum([0, *[len(e.anchors) for e in self.episodes]], dtype=np.int64)
         self.video_identity = video_identity.hexdigest() if video_mode == "proxy_640" else None
         if not len(self):
@@ -488,10 +554,15 @@ class EngramMultiEmbodimentDataset:
             else:
                 width, height = camera_size(route.robot_type, role)
                 images[slot] = np.zeros((height, width, 3), np.uint8)
+        mask = episode.action_mask.copy()
+        if not episode.hand_available[anchor]:
+            mask[HAND_START : HAND_START + route.hand_dim] = False
+        state, actions = episode.states[anchor].copy(), episode.actions[indices].copy()
+        state[~mask], actions[:, ~mask] = 0, 0
         return {
-            "state": episode.states[anchor].copy(),
-            "actions": episode.actions[indices].copy(),
-            "action_mask": episode.action_mask.copy(),
+            "state": state,
+            "actions": actions,
+            "action_mask": mask,
             "embodiment_id": np.int32(episode.embodiment_id),
             "robot_type": route.robot_type,
             "end_effector_type": route.end_effector_type,
@@ -518,8 +589,9 @@ def compute_training_stats(
             values = np.arange(begin, begin + len(episode.anchors), dtype=np.int64)
             by_route[episode.embodiment_id].append(values)
             route = EMBODIMENTS[episode.embodiment_id]
-            if episode.action_mask[HAND_START : HAND_START + route.hand_dim].all():
-                labeled_by_route[episode.embodiment_id].append(values)
+            labeled_values = values[episode.hand_available[episode.anchors]]
+            if len(labeled_values):
+                labeled_by_route[episode.embodiment_id].append(labeled_values)
         mandatory = []
         for parts, labeled in zip(by_route, labeled_by_route, strict=True):
             values = np.concatenate(parts) if parts else np.empty(0, np.int64)
@@ -566,10 +638,11 @@ def compute_training_stats(
             acc["joint_state"].update(states[:, : route.joint_dim])
             acc["joint_action"].update(actions[..., : route.joint_dim])
             counts[route.name]["anchors"] += len(batch)
-            if episode.action_mask[HAND_START : HAND_START + route.hand_dim].all():
-                acc["hand_state"].update(states[:, HAND_START : HAND_START + route.hand_dim])
-                acc["hand_action"].update(actions[..., HAND_START : HAND_START + route.hand_dim])
-                counts[route.name]["labeled_hand_anchors"] += len(batch)
+            labeled = episode.hand_available[batch]
+            if np.any(labeled):
+                acc["hand_state"].update(states[labeled, HAND_START : HAND_START + route.hand_dim])
+                acc["hand_action"].update(actions[labeled, :, HAND_START : HAND_START + route.hand_dim])
+                counts[route.name]["labeled_hand_anchors"] += int(labeled.sum())
     result = {}
     for index, route in enumerate(EMBODIMENTS):
         count = counts[route.name]
@@ -610,4 +683,13 @@ def compute_training_stats(
     expected = len(dataset) if selected is None else len(selected)
     if used != expected:
         raise ValueError("Statistics coverage omitted requested retained anchors")
-    return result, {"used_anchors": used, "total_anchors": len(dataset), "routes": counts}
+    return result, {
+        "used_anchors": used,
+        "total_anchors": len(dataset),
+        "routes": counts,
+        "invalid_anchors": dataset.invalid_anchors,
+        "short_horizon_anchors": dataset.short_horizon_anchors,
+        "static_anchors": dataset.static_anchors,
+        "missing_hand_anchors": dataset.missing_hand_anchors,
+        "source_counts": dataset.source_counts,
+    }

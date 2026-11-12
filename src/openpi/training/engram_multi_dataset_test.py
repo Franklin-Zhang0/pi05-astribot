@@ -241,3 +241,75 @@ def test_stats_reject_undersized_ranges_and_fake_galbot_hand_labels(mixed_manife
     p.write_text(json.dumps(raw))
     with pytest.raises(ValueError, match="unlabeled Galbot"):
         load_route_stats(p)
+
+
+def test_missing_hand_rows_keep_joint_training_and_mask_full_chunk(mixed_manifest):
+    sources = json.loads(mixed_manifest.read_text())["sources"]
+    path = Path(sources[1]["root"]) / "data/chunk-000/file-000.parquet"
+    rows = pq.read_table(path).to_pylist()
+    rows[2][old.LEFT_MODE] = [None]
+    rows[2][old.LEFT_ACTION] = [None] * 6
+    rows[3][old.RIGHT_STATE] = [None] * 6
+    pq.write_table(pa.Table.from_pylist(rows), path)
+    dataset = multi.EngramMultiEmbodimentDataset(mixed_manifest, 3, decode_images=False)
+    begin = int(dataset.offsets[1])
+    for index in (0, 1, 2, 3):
+        sample = dataset[begin + index]
+        assert sample["action_mask"][:20].all()
+        assert not sample["action_mask"][20:].any()
+        assert np.isfinite(sample["state"]).all()
+        assert np.isfinite(sample["actions"]).all()
+    assert dataset[begin + 4]["action_mask"][20:32].all()
+    stats, counts = multi.compute_training_stats(dataset, seed=0)
+    assert counts["routes"][ROUTE_NAMES[1]]["anchors"] == 6
+    assert counts["routes"][ROUTE_NAMES[1]]["labeled_hand_anchors"] == 2
+    assert dataset.missing_hand_anchors[ROUTE_NAMES[1]] == 4
+    transformed = MultiInputs(stats, train=False)(dataset[begin])
+    assert not json.loads(transformed["prompt"])["end_effector_state_available"]
+
+
+def test_finite_nonposition_mode_still_rejected(mixed_manifest):
+    sources = json.loads(mixed_manifest.read_text())["sources"]
+    path = Path(sources[1]["root"]) / "data/chunk-000/file-000.parquet"
+    rows = pq.read_table(path).to_pylist()
+    rows[2][old.LEFT_MODE] = [1.0]
+    pq.write_table(pa.Table.from_pylist(rows), path)
+    with pytest.raises(ValueError, match="must be POSITION"):
+        multi.EngramMultiEmbodimentDataset(mixed_manifest, 3, decode_images=False)
+
+
+def test_saved_statistics_require_full_route_and_anchor_coverage(mixed_manifest, tmp_path):
+    import hashlib
+
+    dataset = multi.EngramMultiEmbodimentDataset(mixed_manifest, 3, decode_images=False)
+    stats, counts = multi.compute_training_stats(dataset, seed=0)
+    path = tmp_path / "engram_multi_stats.json"
+    save_route_stats(path, stats)
+    identity = multi.stats_identity(mixed_manifest, "train", 3, 0.01, 0.0)
+    identity.update(
+        counts,
+        sampled_anchors=counts["used_anchors"],
+        max_frames=None,
+        stats_filename=path.name,
+        stats_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+    provenance = tmp_path / "engram_multi_manifest.json"
+
+    def check(value, **kwargs):
+        provenance.write_text(json.dumps(value))
+        multi.check_stats_identity(provenance, mixed_manifest, "train", 3, 0.01, 0.0, **kwargs)
+
+    check(identity)
+    for key in ("used_anchors", "sampled_anchors", "total_anchors"):
+        bad = json.loads(json.dumps(identity))
+        bad[key] -= 1
+        with pytest.raises(ValueError, match="coverage|counts"):
+            check(bad)
+    bad = json.loads(json.dumps(identity))
+    bad["routes"][ROUTE_NAMES[1]]["labeled_hand_anchors"] = 0
+    with pytest.raises(ValueError, match="coverage|counts"):
+        check(bad)
+    sampled = {**identity, "max_frames": 8}
+    with pytest.raises(ValueError, match="diagnostic"):
+        check(sampled)
+    check(sampled, allow_sampled_stats=True)

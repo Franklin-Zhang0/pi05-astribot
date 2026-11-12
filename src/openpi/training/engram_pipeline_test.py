@@ -40,15 +40,16 @@ def test_configured_parquet_loader_forwards_routes_masks_and_token_state(tmp_pat
     assets = tmp_path / "assets" / "engram/multi_embodiment_train"
     stats_path = assets / "engram_multi_stats.json"
     save_route_stats(stats_path, stats)
+    recipe = config.get_config("pi05_engram_multi")
+    model_config = dataclasses.replace(recipe.model, action_horizon=3)
     identity = multi.stats_identity(manifest_path, "train", 3, 0.01, 0.0)
     identity.update({
         **counts, "sampled_anchors": counts["used_anchors"], "max_frames": None,
         "stats_filename": stats_path.name, "stats_sha256": hashlib.sha256(stats_path.read_bytes()).hexdigest(),
-        "max_token_len": 320, "action_head_names": list(ROUTE_NAMES), "structured_prompt_probability": 0.5,
+        "max_token_len": model_config.max_token_len, "action_head_names": list(ROUTE_NAMES),
+        "structured_prompt_probability": recipe.data.structured_prompt_probability,
     })
     (assets / "engram_multi_manifest.json").write_text(json.dumps(identity))
-    recipe = config.get_config("pi05_engram_multi")
-    model_config = dataclasses.replace(recipe.model, action_horizon=3)
     factory = dataclasses.replace(
         recipe.data, data_root=str(manifest_path), video_mode="original",
         assets=dataclasses.replace(recipe.data.assets, assets_dir=str(tmp_path / "assets")),
@@ -59,7 +60,7 @@ def test_configured_parquet_loader_forwards_routes_masks_and_token_state(tmp_pat
     )
     observation, actions = next(iter(loader))
     assert observation.state.shape == (24, 64)
-    assert observation.tokenized_prompt.shape == (24, 320)
+    assert observation.tokenized_prompt.shape == (24, model_config.max_token_len)
     assert actions.shape == (24, 3, 64)
     np.testing.assert_allclose(observation.state, np.stack(captured))
     for index, spec in enumerate(EMBODIMENTS):
@@ -74,3 +75,20 @@ def test_configured_parquet_loader_forwards_routes_masks_and_token_state(tmp_pat
         np.testing.assert_array_equal(observation.image_masks["left_wrist_0_rgb"][rows], index != 2)
     assert loader.data_config().engram_video_identity == raw.video_identity
     raw.close()
+    # Model and prompt changes must fail before constructing a training dataset.
+    def unexpected_dataset_creation(*_args, **_kwargs):
+        raise AssertionError("Incompatible contracts must be rejected before dataset construction")
+
+    monkeypatch.setattr(data_loader, "create_torch_dataset", unexpected_dataset_creation)
+    manifest_file = assets / "engram_multi_manifest.json"
+    for key, changed in (
+        ("max_token_len", model_config.max_token_len + 1),
+        ("action_head_names", list(reversed(ROUTE_NAMES))),
+        ("structured_prompt_probability", 0.75),
+    ):
+        manifest_file.write_text(json.dumps({**identity, key: changed}))
+        with pytest.raises(ValueError, match="model or prompt mixture"):
+            data_loader.create_torch_data_loader(
+                data_config, model_config, 3, len(raw), num_workers=0, num_batches=1,
+            )
+    manifest_file.write_text(json.dumps(identity))

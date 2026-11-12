@@ -177,7 +177,8 @@ def main(
             prompts.update(episode.tasks[int(episode.task_indices[a])] for a in episode.anchors)
         manifest["prompts_by_route"] = {key: sorted(values) for key, values in prompt_catalog.items()}
         Path(data_config.engram_multi_manifest_path).write_text(json.dumps(manifest, indent=2) + "\n")
-        print(f"Wrote multi-embodiment training statistics to {output_path}: {counts}")
+        summary = {key: value for key, value in counts.items() if key != "source_counts"}
+        print(f"Wrote multi-embodiment training statistics to {output_path}: {summary}")
         return
 
     if data_config.engram_data_dir is not None and data_config.engram_split == "val":

@@ -14,7 +14,9 @@ The pinned [dataset manifest](examples/engram/kitchen_multi_20261112.json) selec
 | Galbot / Inspire RH56DFX hand | 179 | 9 | 188 |
 | **Total** | **1,597** | **84** | **1,681** |
 
-Some W1 exports lack end-effector commands and feedback; the Galbot export lacks all finger labels. They still contribute joint supervision. Missing hand state and loss channels are masked; no hand commands are inferred as labels. Galbot inference therefore returns arm targets only. The old 113-episode export with incomplete provenance stays excluded.
+These selected episodes contain approximately **25.49 hours** of demonstrations before sample-level motion filtering.
+
+Some W1 exports lack end-effector commands and feedback; the Galbot export lacks all finger labels. They still contribute joint supervision. Within labeled exports, a missing hand measurement or command/mode anywhere in a sample's future horizon disables hand supervision for that sample while retaining valid joint supervision. Missing hand state and loss channels are masked; no hand commands are inferred as labels. Galbot inference therefore returns arm targets only. The old 113-episode export with incomplete provenance stays excluded.
 
 ### Inputs, prompts and actions
 
@@ -24,7 +26,7 @@ Each sample contains RGB images, current measured joints and available hand feed
 {"end_effector_state_available":true,"end_effector_type":"linker_l6","instruction":"pick up the cup","robot_type":"dex_w1"}
 ```
 
-JSON keys and instruction text are preserved during tokenization. Plain prompts with missing end-effector state receive `End-effector state unavailable. ` before the instruction. JSON prompts mark the same condition with `false`. The 320-token budget includes the discretized 64-channel state; overlong inputs raise an error rather than silently truncating.
+JSON keys and instruction text are preserved during tokenization. Plain prompts with missing end-effector state receive `End-effector state unavailable. ` before the instruction. JSON prompts mark the same condition with `false`. The 352-token budget includes the discretized 64-channel state; overlong inputs raise an error rather than silently truncating.
 
 The model uses a **64-step, 64-channel packed action**. Only the physical channels for the selected route receive loss. All joint targets are deltas from the **current measured joint state**, shared by the whole 64-step horizon. Hand targets are absolute positions; they are never joint deltas.
 
