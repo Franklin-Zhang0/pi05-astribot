@@ -1,26 +1,164 @@
 # Engram π0.5 and PRISM inference
 
-## Standalone PRISM inference
+## Engram PRISM model inference
 
-This branch also contains an isolated [PRISM inference package](prism/README.md)
-for the Engram hybrid EEF/joint/hand checkpoints. It uses OpenPI's WebSocket
-wire format, with explicit episode resets and one recurrent cache per client.
-It requires an exported PRISM bundle and an NVIDIA GPU; it does not require
-the training repository or dataset mounts. Its environment is separate from
-the π0.5 environment below. [H100 verification](prism/qualification/RESULTS.md)
-matched 995 captured arrays against the original model with zero numerical
-difference, including recurrent history, resets and separate client sessions.
+Use branch **`codex/prism-engram-inference`** for the new PRISM model. Its
+standalone [inference package](prism/README.md) serves the Engram fine-tuning run
+**`20261113_engram_native_eeflocal32_b16_4h100_prod_r1`**, configured for 10,000
+optimizer steps. W1 uses the pretrained robot EEF chunk-offset head for arm
+trajectories and a native joint/hand head for body, head and available end
+effectors. Galbot uses native arm joint targets. This is a different model and
+action interface from the π0.5 recipes below.
+
+### Install and start the PRISM server
+
+Use Linux x86-64, Python 3.12.12 and an NVIDIA GPU with CUDA 12.8-compatible
+drivers and enough memory for the complete model; the full model was verified
+on an H100 80 GB. Install this package from its own directory:
 
 ```bash
-cd prism
+git clone --branch codex/prism-engram-inference \
+  https://github.com/Franklin-Zhang0/pi05-astribot.git engram-inference
+cd engram-inference/prism
 uv sync --extra native-conv
-uv run prism-serve --checkpoint /path/to/engram-prism-bundle --port 8000
+uv run prism-serve --checkpoint /path/to/engram-prism-bundle \
+  --host 127.0.0.1 --port 8000
 ```
 
-PRISM's 32-frame W1 output contains absolute EEF trajectories, body/head joint
-targets and available hand targets. Galbot returns 14 arm joint targets.
-See the [exact inputs, action split and reset protocol](prism/README.md) before
-connecting a robot controller. Existing π0.5 commands and outputs remain below.
+`--checkpoint` takes an **exported inference bundle**, which the model owner
+provides using the export command below. The bundle includes weights,
+normalization, layouts, tokenizer and architecture assets. Downstream users need
+neither the private training repository nor the Engram dataset or its original
+mount paths. Serving uses local assets without downloading model weights.
+The `native-conv` extra follows the GPU-qualified training kernel path; building
+it may require a CUDA toolkit. Keep this environment separate from the parent
+π0.5 environment.
+
+### Send observations and read actions
+
+Run this example from the `prism` environment, substituting your current
+sensor images and measured feedback files. Joint values are radians; W1
+`ee_poses` contains **left then right** `[X,Y,Z,QW,QX,QY,QZ]`, shape `(2,7)`,
+with XYZ in metres in the same recorded torso/arm-base-attached frame as
+training. This frame was inferred from the recordings, not established by a
+documented calibration. W1 requires both measured EEF poses and does not
+silently fall back to arm joint prediction.
+
+```python
+import numpy as np
+from PIL import Image
+from prism_engram.client import PrismClient
+
+def rgb(path):
+    return np.asarray(Image.open(path).convert("RGB"))
+
+with PrismClient(host="127.0.0.1", port=8000) as client:
+    client.reset(seed=0)  # Explicitly reset at each new episode/task.
+    prediction = client.infer({
+        "timestamp_s": 0.0,
+        "robot_type": "dex_w1",
+        "end_effector_type": "linker_l6",
+        "prompt": {
+            "task instruction": "pick up the cup",
+            "end effector type": "hand",
+            "end effector number": "dual",
+            "embodiment": "robot",
+            "setting": "engram_dex_w1_linker_l6",
+        },
+        "observation/head_rgbd": rgb("left_head_rgb.png"),
+        "observation/left_wrist_rgbd": rgb("left_wrist_rgb.png"),  # optional
+        "observation/right_wrist_rgbd": rgb("right_wrist_rgb.png"), # optional
+        "observation/joint_position": np.load("measured_joints_rad.npy"), # (20,)
+        "observation/ee_poses": np.load("measured_ee_poses.npy"),           # (2,7)
+        "observation/hand_position": np.load("measured_hands_percent.npy"), # (12,)
+    })
+    eef_targets = prediction["eef_actions"]           # (32,2,9)
+    body_head_targets = prediction["body_head_actions"] # (32,6)
+    hand_targets = prediction.get("end_effector_actions") # (32,12) when available
+```
+
+You may replace `prompt` with plain `"pick up the cup"`, keeping the robot and
+end-effector route fields. Training mixes canonical pretraining-style JSON and
+instruction-only text with **50% probability each**. At inference, choose one
+style and keep the prompt and route stable until reset. The π0.5 convenience
+JSON with `instruction`, `robot_type` and `end_effector_type` is also accepted
+and converted to the canonical PRISM fields above.
+
+Send current observations at **10 Hz**, advancing sensor `timestamp_s` by
+approximately `0.1` each tick. Use `client.observe(observation)` when updating
+history without requesting a new action chunk. Keep one connection per robot
+stream and reset on new tasks, reconnects or observation gaps; each client has
+independent recurrent state. OpenPI's `WebsocketClientPolicy` is compatible, but
+its stock `reset()` is a no-op: send `client.infer({"op": "reset", "seed": 0})`
+explicitly when using that client.
+
+Use HWC `uint8` RGB images. W1 head input is the left stereo eye; for an uncropped
+side-by-side image set `head_camera_layout="stereo"` in the request. Galbot uses
+the left head camera. Omit missing wrist fields; the server preserves and masks
+their camera slots. Omit hand feedback when unavailable rather than filling it
+with zeros; unavailable hand outputs are omitted.
+
+### PRISM action split
+
+The horizon is **32 native action frames at nominal 30 Hz**. Outputs are already
+unnormalized **absolute targets**; do not add the current state a second time.
+
+| Output key | Shape | Physical ordering and units |
+| --- | --- | --- |
+| W1 `eef_actions` | `(32,2,9)` | Left then right arm; absolute XYZ in metres, then rotation6D |
+| W1 `body_head_actions` | `(32,6)` | `ANKLE, KNEE, BUTTOCK, WAIST, NECK1, NECK2`, radians |
+| W1 gripper `end_effector_actions` | `(32,2)` | Left then right, percent `[0,100]` training units |
+| W1 L6 `end_effector_actions` | `(32,12)` | 6 left then 6 right, percent `[0,100]` training units |
+| W1 L20 `end_effector_actions` | `(32,32)` | 16 left then 16 right, signed percent `[-100,100]` training units |
+| Galbot `joint_actions` | `(32,14)` | Right arm joints 1–7, then left arm joints 1–7, radians |
+
+W1 measured joint input order is the six body/head joints above, then
+`LEFT_J1–LEFT_J7`, then `RIGHT_J1–RIGHT_J7`. Supported routes are `dex_w1` with
+`gripper`, `linker_l6` or `linker_l20`, and `galbot` with
+`inspire_rh56dfx_hand`. Galbot has no recorded finger labels and returns arm
+targets only. Available W1 hand actions are trained as chunk-relative recorded
+hand positions, not 3D keypoints; their output units remain percentages.
+
+EEF rotation6D is the **first two matrix rows flattened**, matching pretraining.
+Training uses `dp = p_future - p_current` and
+`dR = R_future @ R_current.T`; serving composes these with the measured anchor
+once. Native joint/hand normalization uses saved per-route quantiles, and EEF
+normalization uses saved training mean/std. Joint/hand command rows have tick
+offsets **0…31**, while EEF future-feedback rows have offsets **1…32**; preserve
+the returned `joint_hand_tick_offsets` and `eef_tick_offsets` when controlling
+the robot. W1 arm IK/control is external to this server. Predictions are raw,
+unclipped targets, and the server does not execute robot commands.
+
+### Export this run for downstream users
+
+After successful completion, the full run is archived at
+`/hand_keypoint_data/engram_data/ckpt/prism/20261113_engram_native_eeflocal32_b16_4h100_prod_r1`.
+The archive's `_SYNC_COMPLETE.json` marks the verified completed copy. The model
+owner exports the final checkpoint once, using the tokenizer/architecture
+assets pinned by the checkpoint:
+
+```bash
+# Run from prism/ after the completed run has been archived.
+ENGRAM_RUN=/hand_keypoint_data/engram_data/ckpt/prism/20261113_engram_native_eeflocal32_b16_4h100_prod_r1
+test -f "$ENGRAM_RUN/_SYNC_COMPLETE.json"
+uv run prism-export --checkpoint "$ENGRAM_RUN/checkpoint-10000" \
+  --output /path/to/engram-prism-bundle \
+  --qwen-assets /path/to/pinned-qwen-snapshot \
+  --cradio-assets /path/to/pinned-cradio-snapshot \
+  --fast-assets /path/to/fast-tokenizer
+```
+
+Distribute the exported bundle alongside this public branch. It excludes the
+dataset catalogs, private mount paths and optimizer state. The exporter refuses
+an existing output directory and publishes its integrity manifest last.
+
+[H100 verification](prism/qualification/RESULTS.md) of checkpoint-2000 matched
+995 captured arrays against the original runtime with zero numerical difference,
+including history, resets and client isolation. That verifies implementation
+alignment for the tested weights; it is not a robot performance evaluation or
+a separate parity check of the final 10,000-step weights. See the
+[full PRISM inference contract](prism/README.md) for detailed schemas and
+verification. Existing π0.5 commands and outputs follow below.
 
 ## Engram multi-embodiment π0.5 fine-tuning and inference
 
