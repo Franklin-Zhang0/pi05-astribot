@@ -1,0 +1,79 @@
+{
+  "schema": "prism_engram_preprocessing_reference_v1",
+  "source_revision": "de6415d53c031eff5c03ba68cb3fd6dec142be44",
+  "qualification": "CPU RGB pixel preprocessing only; no model/GPU claim",
+  "checks": [
+    {
+      "source_hw": [
+        360,
+        640
+      ],
+      "output_hw": [
+        256,
+        256
+      ],
+      "bitwise_equal": true,
+      "pixels_sha256": "d58bc7ea441bf751a4d8b05761e28e67d2fefa9eed8e6c5d7603bbfe9da1220d"
+    },
+    {
+      "source_hw": [
+        360,
+        640
+      ],
+      "output_hw": [
+        192,
+        336
+      ],
+      "bitwise_equal": true,
+      "pixels_sha256": "3227d9c3bb01967bafa30f8c47dc13d8984340ce7d9cf4d24c661aa391081f99"
+    },
+    {
+      "source_hw": [
+        480,
+        640
+      ],
+      "output_hw": [
+        256,
+        256
+      ],
+      "bitwise_equal": true,
+      "pixels_sha256": "05af85dd87a18dfa6019f6c96726d52c8eeb122eb4d32f897ecf043fefc48d8e"
+    },
+    {
+      "source_hw": [
+        480,
+        640
+      ],
+      "output_hw": [
+        192,
+        336
+      ],
+      "bitwise_equal": true,
+      "pixels_sha256": "bfaef19b48b62f70bbc1a007afa1576daa81f23a1704ee44a0ac96ec9c78194e"
+    },
+    {
+      "source_hw": [
+        360,
+        480
+      ],
+      "output_hw": [
+        256,
+        256
+      ],
+      "bitwise_equal": true,
+      "pixels_sha256": "5263f784ca0c92d8d35ab1a9a2a0f99fd03e7466fa47e9ade13308d9fd98e867"
+    },
+    {
+      "source_hw": [
+        360,
+        480
+      ],
+      "output_hw": [
+        192,
+        336
+      ],
+      "bitwise_equal": true,
+      "pixels_sha256": "b353af3c01da83ae3d8d280c91f6995ddb5f86fb1bc75045bc1f2a353a683a19"
+    }
+  ]
+}

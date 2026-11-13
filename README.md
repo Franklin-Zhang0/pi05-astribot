@@ -1,4 +1,26 @@
-# Engram multi-embodiment π0.5 fine-tuning and inference
+# Engram π0.5 and PRISM inference
+
+## Standalone PRISM inference
+
+This branch also contains an isolated [PRISM inference package](prism/README.md)
+for the Engram hybrid EEF/joint/hand checkpoints. It uses OpenPI's WebSocket
+wire format, with explicit episode resets and one recurrent cache per client.
+It requires an exported PRISM bundle and an NVIDIA GPU; it does not require
+the training repository or dataset mounts. Its environment is separate from
+the π0.5 environment below.
+
+```bash
+cd prism
+uv sync --extra native-conv
+uv run prism-serve --checkpoint /path/to/engram-prism-bundle --port 8000
+```
+
+PRISM's 32-frame W1 output contains absolute EEF trajectories, body/head joint
+targets and available hand targets. Galbot returns 14 arm joint targets.
+See the [exact inputs, action split and reset protocol](prism/README.md) before
+connecting a robot controller. Existing π0.5 commands and outputs remain below.
+
+## Engram multi-embodiment π0.5 fine-tuning and inference
 
 The `pi05_engram_multi` recipe trains Dex W1 gripper, Linker L6 and Linker L20 demonstrations alongside Galbot demonstrations. It starts from `pi05_base`, uses a shared diffusion transformer with separate input and output projections for each robot/end-effector route, and trains with the head camera plus wrist cameras wherever recorded. The earlier 22-channel recipe and server remain available for existing checkpoints; their instructions are below.
 

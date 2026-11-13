@@ -1,0 +1,28 @@
+{
+  "passed": true,
+  "checkpoint_step": 2000,
+  "seconds": 86.96196114644408,
+  "parameters": 4986981802,
+  "state_tensors": 1707,
+  "state_dtypes": {
+    "torch.float32": 1162,
+    "torch.int64": 1,
+    "torch.bfloat16": 544
+  },
+  "parameter_alias_groups": [
+    [
+      "qwen.model.embed_tokens.weight",
+      "qwen.lm_head.weight"
+    ]
+  ],
+  "parameter_alias_identity_verified": true,
+  "meta_parameters": 0,
+  "meta_buffers": 0,
+  "max_rss_kib": 3053108,
+  "tokenizer": "TokenizersBackend",
+  "model": "PrismVLA",
+  "cuda": false,
+  "gpu_inference_tested": false,
+  "policy": "strict_names_shapes_assign_true_mmap_device_only_meta_construction_preserve_tied_weights",
+  "bundle_weights_sha256": "28aad7f18088e30c8f403ff896432e556b5e1d1ccd481b59da121595fd35e96a"
+}

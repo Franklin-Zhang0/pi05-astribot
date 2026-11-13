@@ -1,0 +1,331 @@
+{
+  "schema": "prism-inference-source-v1",
+  "source_commit": "de6415d53c031eff5c03ba68cb3fd6dec142be44",
+  "files": {
+    "prism_vla/__init__.py": {
+      "source_sha256": "8bca982e9eaa2352f8df389b62ebe97185bfec708e08846e6bd3905942d506a4",
+      "release_sha256": "ffb44c2a11416bdc1d82759beb907fc8719040ed9d84f39d41fa70abfd400cb2",
+      "modified": true
+    },
+    "prism_vla/data/__init__.py": {
+      "source_sha256": "7eee8c94fcc504a2e569d8e8a45672a7127636c754bb7ba224bab0654eb8d584",
+      "release_sha256": "2abcc453fca385eb4acc52d021e7efc1b14940891bd18552473af0fda4fe71cf",
+      "modified": true
+    },
+    "prism_vla/data/datasets/__init__.py": {
+      "source_sha256": "7ca2c2437028836ade166b50ef88723b7cb3559d629e9041989137536e2b4855",
+      "release_sha256": "2abcc453fca385eb4acc52d021e7efc1b14940891bd18552473af0fda4fe71cf",
+      "modified": true
+    },
+    "prism_vla/data/datasets/cotrain_contract.py": {
+      "source_sha256": "d6e462ad28bb42022c65be196c851ee9316b229087aea8cd55273d7e7b53c323",
+      "release_sha256": "371469c243699aa6d07ba6cc534ffa335a5f1889cbe50eaca8ce59dec5079723",
+      "modified": true
+    },
+    "prism_vla/data/datasets/ego_action_normalization.py": {
+      "source_sha256": "91a069fcd7dc7a45da2fd760caac3738c56961bac7f0d23a24bb398c60a5ad89",
+      "release_sha256": "91a069fcd7dc7a45da2fd760caac3738c56961bac7f0d23a24bb398c60a5ad89",
+      "modified": false
+    },
+    "prism_vla/data/datasets/ego_action_representation.py": {
+      "source_sha256": "da84a5f3c39417395cc6a780dd9dfa21fb58ee1083eaee92c7928175e0ed8f23",
+      "release_sha256": "887e2a9994e3d51b501b7f5e770f063ca78eabf4edf9620df47a286a46497cc6",
+      "modified": true
+    },
+    "prism_vla/data/datasets/ego_schema.py": {
+      "source_sha256": "b01d9168b5090b03ff1c26b3224f63aea865ad35eb010621855df0765c05df66",
+      "release_sha256": "b01d9168b5090b03ff1c26b3224f63aea865ad35eb010621855df0765c05df66",
+      "modified": false
+    },
+    "prism_vla/data/datasets/robot_action_normalization.py": {
+      "source_sha256": "b23d867dec99077273a9cadbfcfa1269f6d933ef9f9c8649ae0a02849142e990",
+      "release_sha256": "b23d867dec99077273a9cadbfcfa1269f6d933ef9f9c8649ae0a02849142e990",
+      "modified": false
+    },
+    "prism_vla/data/datasets/robot_proprio_normalization.py": {
+      "source_sha256": "bb260500b4da35c736b0b7f44422c7f62ced3326fd61b01ced3cab59b7df9a54",
+      "release_sha256": "bb260500b4da35c736b0b7f44422c7f62ced3326fd61b01ced3cab59b7df9a54",
+      "modified": false
+    },
+    "prism_vla/data/fast_targets.py": {
+      "source_sha256": "234d1985e7a816f3da68f702792aedd83ae7e0db5a926a42839531a5b4edd4b4",
+      "release_sha256": "234d1985e7a816f3da68f702792aedd83ae7e0db5a926a42839531a5b4edd4b4",
+      "modified": false
+    },
+    "prism_vla/data/fast_tokenizer.py": {
+      "source_sha256": "b46f35e21d1a454bf77cdc0c99a09ec3c5f20d2e64c9f8a247b822ec8d3a1a02",
+      "release_sha256": "3b521b6276ae1a70108b3448f24359f9c6c3319bba080aa0d0137809f194e822",
+      "modified": true
+    },
+    "prism_vla/data/future_cls.py": {
+      "source_sha256": "11f52bcbb80dad871bb31753dfea92ba72c38e2b022845897e39cc642526a2da",
+      "release_sha256": "11f52bcbb80dad871bb31753dfea92ba72c38e2b022845897e39cc642526a2da",
+      "modified": false
+    },
+    "prism_vla/data/instruction_conditioning.py": {
+      "source_sha256": "e9d6050245ab274d827529f42ca29b22b4cd76b3a1ab74c1443e1c844817ce25",
+      "release_sha256": "e9d6050245ab274d827529f42ca29b22b4cd76b3a1ab74c1443e1c844817ce25",
+      "modified": false
+    },
+    "prism_vla/inference/__init__.py": {
+      "source_sha256": "487872eaa2734b451e735449a1b5852d5df2961933ada233f395b2eb2d88f52a",
+      "release_sha256": "2abcc453fca385eb4acc52d021e7efc1b14940891bd18552473af0fda4fe71cf",
+      "modified": true
+    },
+    "prism_vla/inference/actions.py": {
+      "source_sha256": "313821791168fe36f95dd51de17fdedc569cf28f6cc3423a7321061db9c05688",
+      "release_sha256": "313821791168fe36f95dd51de17fdedc569cf28f6cc3423a7321061db9c05688",
+      "modified": false
+    },
+    "prism_vla/modeling/__init__.py": {
+      "source_sha256": "3b6e94320972a6aabd3d84b6661a8d12341bebd011a7f3f8c50ec5f9ed36d869",
+      "release_sha256": "2abcc453fca385eb4acc52d021e7efc1b14940891bd18552473af0fda4fe71cf",
+      "modified": true
+    },
+    "prism_vla/modeling/act_observer.py": {
+      "source_sha256": "5d40e15640459380b2af4c728941970d2e2137f21c6c28fcc9ef8732b379ed1f",
+      "release_sha256": "5d40e15640459380b2af4c728941970d2e2137f21c6c28fcc9ef8732b379ed1f",
+      "modified": false
+    },
+    "prism_vla/modeling/action_expert_cache.py": {
+      "source_sha256": "ae843558934b571c2e09f9fa7491dbbd90ceb9703c3338e01e82e1f0ab2788bd",
+      "release_sha256": "ae843558934b571c2e09f9fa7491dbbd90ceb9703c3338e01e82e1f0ab2788bd",
+      "modified": false
+    },
+    "prism_vla/modeling/action_head_config.py": {
+      "source_sha256": "4a0c32829d3840e279011db35ddc8f03f7358cd243d635921623708d38583c14",
+      "release_sha256": "4a0c32829d3840e279011db35ddc8f03f7358cd243d635921623708d38583c14",
+      "modified": false
+    },
+    "prism_vla/modeling/action_latent.py": {
+      "source_sha256": "dad5ca2bd8cb8ec90b9f91849c73a95f6a88f7d71284ea395f948af4e66536c6",
+      "release_sha256": "dad5ca2bd8cb8ec90b9f91849c73a95f6a88f7d71284ea395f948af4e66536c6",
+      "modified": false
+    },
+    "prism_vla/modeling/action_layout.py": {
+      "source_sha256": "abca10078b9a47f465d23a62eba46899d714fa37dfc3f6c0957a0413ad193b11",
+      "release_sha256": "abca10078b9a47f465d23a62eba46899d714fa37dfc3f6c0957a0413ad193b11",
+      "modified": false
+    },
+    "prism_vla/modeling/action_patch.py": {
+      "source_sha256": "f33c986e3b45a60c7ec7cc23b1b70d5bfcb884dc7e813e19652216f3a6bc58d3",
+      "release_sha256": "f33c986e3b45a60c7ec7cc23b1b70d5bfcb884dc7e813e19652216f3a6bc58d3",
+      "modified": false
+    },
+    "prism_vla/modeling/action_patch_output.py": {
+      "source_sha256": "ec8d508131f6f394395118ea8ccef576af6f539328cc531af00c456b4bac24d8",
+      "release_sha256": "ec8d508131f6f394395118ea8ccef576af6f539328cc531af00c456b4bac24d8",
+      "modified": false
+    },
+    "prism_vla/modeling/attention_policy.py": {
+      "source_sha256": "b8fa02c3970348016b323074805470a5b179eacd5cc2e347ecde0f2d24329064",
+      "release_sha256": "b8fa02c3970348016b323074805470a5b179eacd5cc2e347ecde0f2d24329064",
+      "modified": false
+    },
+    "prism_vla/modeling/backbone_layers.py": {
+      "source_sha256": "13ac5bd048382216572a41c1a0b17bfcc2609c9696ca9ddbf49cfbb6789412ea",
+      "release_sha256": "13ac5bd048382216572a41c1a0b17bfcc2609c9696ca9ddbf49cfbb6789412ea",
+      "modified": false
+    },
+    "prism_vla/modeling/camera_compact.py": {
+      "source_sha256": "f1c2f0f05bcb962d64e4d781151deb5a8dc80ddbcfd3141a54aa5aa263ac0127",
+      "release_sha256": "f1c2f0f05bcb962d64e4d781151deb5a8dc80ddbcfd3141a54aa5aa263ac0127",
+      "modified": false
+    },
+    "prism_vla/modeling/camera_layout.py": {
+      "source_sha256": "81ab536981cd24136b5c6bffef356945f4d93216ac008efe5a23bc0349515edd",
+      "release_sha256": "81ab536981cd24136b5c6bffef356945f4d93216ac008efe5a23bc0349515edd",
+      "modified": false
+    },
+    "prism_vla/modeling/camera_reconstruction.py": {
+      "source_sha256": "51455b355dc70942272378d381d82ce5ac9d198f5e52056912b3c55365abc73c",
+      "release_sha256": "51455b355dc70942272378d381d82ce5ac9d198f5e52056912b3c55365abc73c",
+      "modified": false
+    },
+    "prism_vla/modeling/camera_token_budget.py": {
+      "source_sha256": "949a177966c4346ab21f193c295413e1ba255b725bff99db2255d44fc6a494e1",
+      "release_sha256": "949a177966c4346ab21f193c295413e1ba255b725bff99db2255d44fc6a494e1",
+      "modified": false
+    },
+    "prism_vla/modeling/checkpointing.py": {
+      "source_sha256": "3daeb79554ae6c50a14bd3dbe044903d095536b3b69e2ca93487dd5c2048267a",
+      "release_sha256": "da8056db143e43a71cffbb6609776e47226f16eae5bd9bdb99fa0d9782bb9faa",
+      "modified": true
+    },
+    "prism_vla/modeling/condition_mask.py": {
+      "source_sha256": "11534420d6aeb214b9a66b3fece9f3fd60439b6cb6a4c94851bf6b528f711633",
+      "release_sha256": "11534420d6aeb214b9a66b3fece9f3fd60439b6cb6a4c94851bf6b528f711633",
+      "modified": false
+    },
+    "prism_vla/modeling/config.py": {
+      "source_sha256": "517559b1ee0a0d7303b84b214a34241d1647bd8b40cad414d20ff9e03578cab9",
+      "release_sha256": "517559b1ee0a0d7303b84b214a34241d1647bd8b40cad414d20ff9e03578cab9",
+      "modified": false
+    },
+    "prism_vla/modeling/direct_query.py": {
+      "source_sha256": "e689085bde430b46c10cbcdbbaa20b0791ef6efe49701c4e9b9ebfbf8e245e6f",
+      "release_sha256": "e689085bde430b46c10cbcdbbaa20b0791ef6efe49701c4e9b9ebfbf8e245e6f",
+      "modified": false
+    },
+    "prism_vla/modeling/direct_query_stream.py": {
+      "source_sha256": "402b7ba690d12207f0bd0e555bfecb9f84d1e47581343c3f76547f059d5ea168",
+      "release_sha256": "402b7ba690d12207f0bd0e555bfecb9f84d1e47581343c3f76547f059d5ea168",
+      "modified": false
+    },
+    "prism_vla/modeling/ego_weak_supervision.py": {
+      "source_sha256": "ed43413b58ff4c5ce2208e3dad25004d5ba1af510beeff0d4817d4beea62a5ec",
+      "release_sha256": "ed43413b58ff4c5ce2208e3dad25004d5ba1af510beeff0d4817d4beea62a5ec",
+      "modified": false
+    },
+    "prism_vla/modeling/engram_finetune.py": {
+      "source_sha256": "620b2788f6b83945f992f434a754a7a93f7070210d23cf766eef1c22f5aa9f90",
+      "release_sha256": "9593e9d2f37cbe97515e7cf1cec6c8c24e5deed25a6eb6bbbdfd36c8bf9e5f9e",
+      "modified": true
+    },
+    "prism_vla/modeling/engram_native.py": {
+      "source_sha256": "26949f35c91c49b93e46ef1c4a4fd282a889649ed625f9bda27d9630ec760bc5",
+      "release_sha256": "26949f35c91c49b93e46ef1c4a4fd282a889649ed625f9bda27d9630ec760bc5",
+      "modified": false
+    },
+    "prism_vla/modeling/fast_attention.py": {
+      "source_sha256": "a153fb8e471109915cf7d6356aa1517805155fc1961a87d5f978a4ccfaefd65e",
+      "release_sha256": "a153fb8e471109915cf7d6356aa1517805155fc1961a87d5f978a4ccfaefd65e",
+      "modified": false
+    },
+    "prism_vla/modeling/fast_loss.py": {
+      "source_sha256": "3caca2b7450f4b14ff9b7ab72bd5c5c327e81dea6eeb7620adfc37aeb456bf6d",
+      "release_sha256": "3caca2b7450f4b14ff9b7ab72bd5c5c327e81dea6eeb7620adfc37aeb456bf6d",
+      "modified": false
+    },
+    "prism_vla/modeling/forward.py": {
+      "source_sha256": "d0155c71a866020d63f9a6d08ed9ae45604d60ff415f9da923b257cce626de18",
+      "release_sha256": "9f9e1603b821f7131a153abc726d44c1dc7471cd738d83766a4d69d680943879",
+      "modified": true
+    },
+    "prism_vla/modeling/idm_attention_cache.py": {
+      "source_sha256": "3d01a030964606482e3d85b892bd66f4ecc4c7d7159caa5184d1d2d4b897c819",
+      "release_sha256": "3d01a030964606482e3d85b892bd66f4ecc4c7d7159caa5184d1d2d4b897c819",
+      "modified": false
+    },
+    "prism_vla/modeling/idm_backends.py": {
+      "source_sha256": "e274da1da0e38b705c713396f28cfc3ed2e55c8eac470e613ab1fbcafcc4a870",
+      "release_sha256": "e274da1da0e38b705c713396f28cfc3ed2e55c8eac470e613ab1fbcafcc4a870",
+      "modified": false
+    },
+    "prism_vla/modeling/idm_muonclip.py": {
+      "source_sha256": "ff049af024c82f36b0a27140f61e6c0c40ee804b8bfb9411269408ec9f9fd3ae",
+      "release_sha256": "ff049af024c82f36b0a27140f61e6c0c40ee804b8bfb9411269408ec9f9fd3ae",
+      "modified": false
+    },
+    "prism_vla/modeling/idm_qk_control.py": {
+      "source_sha256": "f91db88d589ce4e36a96fe167144b6e71d4f985ef8423dc8c349e6475eae3149",
+      "release_sha256": "f91db88d589ce4e36a96fe167144b6e71d4f985ef8423dc8c349e6475eae3149",
+      "modified": false
+    },
+    "prism_vla/modeling/inference.py": {
+      "source_sha256": "20fc97a76ab430a8b9e7ca12029fb27ccd4818a6447c253c37dc0176a35bdfa9",
+      "release_sha256": "20fc97a76ab430a8b9e7ca12029fb27ccd4818a6447c253c37dc0176a35bdfa9",
+      "modified": false
+    },
+    "prism_vla/modeling/instruction_encoder.py": {
+      "source_sha256": "4f9b95dab705cfbb03b4b5b34ab2d6bab467247940918eb141ec72a38d02e8d4",
+      "release_sha256": "37bb8e2f6574ca62aa92e3d48d0b6259ba8770729ccb7d75b3d2cb45b1ef07de",
+      "modified": true
+    },
+    "prism_vla/modeling/latent_norm.py": {
+      "source_sha256": "6944dc525f7759ad05f607ae12fd714d1a88e6cdffa49f15f72a72465a5cf62f",
+      "release_sha256": "6944dc525f7759ad05f607ae12fd714d1a88e6cdffa49f15f72a72465a5cf62f",
+      "modified": false
+    },
+    "prism_vla/modeling/losses.py": {
+      "source_sha256": "f512f6035721961fb12b4d5071e92acf9c528aaadc3f466eeda56bd6fa528764",
+      "release_sha256": "f512f6035721961fb12b4d5071e92acf9c528aaadc3f466eeda56bd6fa528764",
+      "modified": false
+    },
+    "prism_vla/modeling/model.py": {
+      "source_sha256": "1b8ccf1fdb716460d54a7bfe010446e64c754aef6aa6baeac378ff980635fb54",
+      "release_sha256": "1b8ccf1fdb716460d54a7bfe010446e64c754aef6aa6baeac378ff980635fb54",
+      "modified": false
+    },
+    "prism_vla/modeling/multi_action_heads.py": {
+      "source_sha256": "a34981dbd16958145d4c50f132315ee3dcde0be35d6276c5d5a53a0ec8268e66",
+      "release_sha256": "a34981dbd16958145d4c50f132315ee3dcde0be35d6276c5d5a53a0ec8268e66",
+      "modified": false
+    },
+    "prism_vla/modeling/pi05_action_expert.py": {
+      "source_sha256": "4c9c179d6ca170c3bb50cf87f462cb3af7b397a3839a905ed2f14af25bc41545",
+      "release_sha256": "4c9c179d6ca170c3bb50cf87f462cb3af7b397a3839a905ed2f14af25bc41545",
+      "modified": false
+    },
+    "prism_vla/modeling/proprio.py": {
+      "source_sha256": "599166282b79dd9b8f8d0bead71aee16c8dacd79d9408eea970db11f4222aeb9",
+      "release_sha256": "599166282b79dd9b8f8d0bead71aee16c8dacd79d9408eea970db11f4222aeb9",
+      "modified": false
+    },
+    "prism_vla/modeling/qwen35_deltanet_patch.py": {
+      "source_sha256": "8c2cf45f95f223e99f8ac259aadd7941535500077ffd60dc993ad0cd8b3b2771",
+      "release_sha256": "8c2cf45f95f223e99f8ac259aadd7941535500077ffd60dc993ad0cd8b3b2771",
+      "modified": false
+    },
+    "prism_vla/modeling/qwen_activation_offload.py": {
+      "source_sha256": "39896e7bb9e743a75b42d91bd923eca6b3c50747acf932c75b4ea767687e4fb8",
+      "release_sha256": "39896e7bb9e743a75b42d91bd923eca6b3c50747acf932c75b4ea767687e4fb8",
+      "modified": false
+    },
+    "prism_vla/modeling/qwen_mlp_checkpoint.py": {
+      "source_sha256": "c29c2468c9c9e794c597cbcdffd9466dcb49ad43761c73e8f8a5a9ce88254a83",
+      "release_sha256": "c29c2468c9c9e794c597cbcdffd9466dcb49ad43761c73e8f8a5a9ce88254a83",
+      "modified": false
+    },
+    "prism_vla/modeling/release_assets.py": {
+      "source_sha256": null,
+      "release_sha256": "ed25a689cf0443cf286dd096f9286387eb75fec86c183253dee1991c63319d75",
+      "modified": true
+    },
+    "prism_vla/modeling/runtime.py": {
+      "source_sha256": "e86475ba0df09168a0193698719b142fdd575f715ebd0b3396cce4ab37ef02c4",
+      "release_sha256": "e86475ba0df09168a0193698719b142fdd575f715ebd0b3396cce4ab37ef02c4",
+      "modified": false
+    },
+    "prism_vla/modeling/text_deepstack.py": {
+      "source_sha256": "1d627c5c72c7627b79599e3afc439dd924c728cd12afd027eddaae6b4df4edc4",
+      "release_sha256": "1d627c5c72c7627b79599e3afc439dd924c728cd12afd027eddaae6b4df4edc4",
+      "modified": false
+    },
+    "prism_vla/modeling/visual_fusion.py": {
+      "source_sha256": "af507b6c62ba0b5493966731c976aa7c6f4c8835bbe25d9ef25cd863bbfb140a",
+      "release_sha256": "af507b6c62ba0b5493966731c976aa7c6f4c8835bbe25d9ef25cd863bbfb140a",
+      "modified": false
+    },
+    "prism_vla/perception/__init__.py": {
+      "source_sha256": "8e99ad2249f710471638c916205a825a4d85699021df6cd108d6f0a5048b57fe",
+      "release_sha256": "2abcc453fca385eb4acc52d021e7efc1b14940891bd18552473af0fda4fe71cf",
+      "modified": true
+    },
+    "prism_vla/perception/encoders/__init__.py": {
+      "source_sha256": "fd123584bbf54c20f7188f2d7a92d4267733745f69c9abb502ed8c7dc363f155",
+      "release_sha256": "fd123584bbf54c20f7188f2d7a92d4267733745f69c9abb502ed8c7dc363f155",
+      "modified": false
+    },
+    "prism_vla/perception/encoders/cradio.py": {
+      "source_sha256": "cf5f583a0e839768b1a10802813bf0e4b50e628fdac40598d4d244c38bab6a61",
+      "release_sha256": "3721fcf3c5e7befa5ca5ff9b1ddd25b7c36801c7bba0baf49a5594403b2ad418",
+      "modified": true
+    },
+    "prism_vla/perception/encoders/dino.py": {
+      "source_sha256": "73ac5a7fd2b4047af6ead95a3f9a81f209f3ccffed563de10b17f201eb723cb0",
+      "release_sha256": "73ac5a7fd2b4047af6ead95a3f9a81f209f3ccffed563de10b17f201eb723cb0",
+      "modified": false
+    },
+    "prism_vla/perception/encoders/semantic.py": {
+      "source_sha256": "9211b73baa3465d60bdb7f87deda73372f2284af4280b0aefeb8df4195c6b91e",
+      "release_sha256": "9211b73baa3465d60bdb7f87deda73372f2284af4280b0aefeb8df4195c6b91e",
+      "modified": false
+    },
+    "prism_vla/transition_rows.py": {
+      "source_sha256": "28d3480bf14620007c2f5530e3bcab635516d53bf965b701f17de02c37cf4241",
+      "release_sha256": "28d3480bf14620007c2f5530e3bcab635516d53bf965b701f17de02c37cf4241",
+      "modified": false
+    }
+  }
+}
