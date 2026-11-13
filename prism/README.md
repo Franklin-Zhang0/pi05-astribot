@@ -6,9 +6,10 @@ runtime is selected from the exact trained implementation; its source hashes
 and release adaptations are recorded in [RUNTIME_SOURCES.md](RUNTIME_SOURCES.md).
 The π0.5 code and environment in the parent repository remain independent.
 
-[Validation status](qualification/RESULTS.md): 64 CPU tests and a complete
-offline checkpoint restore pass. Full-model GPU parity remains pending; this
-does not establish closed-loop robot performance.
+[Validation status](qualification/RESULTS.md): 64 CPU tests, a complete offline
+checkpoint restore, and full-model H100 GPU parity pass. All 995 captured arrays
+matched the original graph with zero numerical difference. This verifies runtime
+alignment; it does not establish closed-loop robot performance.
 
 ## Start a server
 

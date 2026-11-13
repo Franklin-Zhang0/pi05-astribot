@@ -7,7 +7,9 @@ for the Engram hybrid EEF/joint/hand checkpoints. It uses OpenPI's WebSocket
 wire format, with explicit episode resets and one recurrent cache per client.
 It requires an exported PRISM bundle and an NVIDIA GPU; it does not require
 the training repository or dataset mounts. Its environment is separate from
-the π0.5 environment below.
+the π0.5 environment below. [H100 verification](prism/qualification/RESULTS.md)
+matched 995 captured arrays against the original model with zero numerical
+difference, including recurrent history, resets and separate client sessions.
 
 ```bash
 cd prism

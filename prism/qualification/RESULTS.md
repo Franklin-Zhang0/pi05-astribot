@@ -28,11 +28,24 @@ reference **bit for bit** for six tested geometry/resolution combinations; see
 matched state/action normalization bitwise and canonical JSON byte-for-byte
 across seven route/hand-availability cases.
 
-**Full-model GPU inference parity is pending an available GPU.** The temporary
-validation allocation was rejected by the provider's resource quota; no instance
-was allocated and no existing training was interrupted. No GPU parity
-pass or policy-quality result is claimed here. The GPU fixture covers 19
-cases/94 observations, reset replay, history across the eight-observation window,
-and interleaved sessions with different routes/prompts. Final qualification
-receipts will identify their exact checkpoint, fixture, compute environment and
-numerical tolerances. Existing training allocations were not interrupted.
+**Full-model H100 GPU inference parity passes.** The standalone and original
+graphs ran in separate CUDA processes with the same checkpoint-2000 weights,
+inputs and explicit noise. Across 19 synthetic cases/94 observations, all **995
+captured arrays matched with maximum absolute difference 0.0**, at declared
+`atol=rtol=1e-5`. Both graphs also passed 326 total reset-replay checks and
+30 interleaved-client checks each, including different routes/prompts and
+history across the eight-observation window. The cases cover all four routes,
+plain/JSON text, head-only/both/asymmetric wrists and missing hand feedback.
+
+See [the complete sanitized GPU receipt](gpu_parity.json), which records the
+tested runtime commit, training-source revision, weight/fixture identities,
+per-array differences, reset checks, and interleaved-session results.
+The test used an H100 80 GB, Torch 2.11.0+cu128, Transformers 5.4.0, Triton 3.3.1,
+FLA 0.5.1, causal-conv1d 1.6.2.post1, NumPy 2.2.6 and OpenCV 4.11.0.
+The temporary validation job completed successfully after about 11.25 minutes;
+existing training allocations were not interrupted.
+
+The GPU comparison isolates model-graph portability using the same serving
+adapter. The separate CPU checks above establish normalization, physical action
+decoding and preprocessing agreement with the private reference. This is runtime
+qualification on a synthetic fixture, not closed-loop robot policy evaluation.
