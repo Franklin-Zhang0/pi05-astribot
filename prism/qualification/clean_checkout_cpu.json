@@ -1,0 +1,12 @@
+{
+  "passed": true,
+  "public_commit": "1c3dd1705d9813f96071148cc9475c3016dc0f08",
+  "runtime_from_clean_git_archive": true,
+  "private_repository_imports": false,
+  "checkpoint_step": 2000,
+  "strict_restore": true,
+  "unique_parameters": 4986981802,
+  "elapsed_seconds": 87.52199623733759,
+  "max_rss_kib": 3264956,
+  "gpu_inference_tested": false
+}

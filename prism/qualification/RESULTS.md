@@ -19,6 +19,8 @@ embedding/output weight identity preserved and no remaining meta tensors.
 Memory-mapped loading with empty parameter construction takes about 87 seconds
 and peaks at 2.91 GiB resident memory in the development container. It does not
 globally round FP32 weights. See [the CPU receipt](full_checkpoint_cpu.json).
+The same complete restore also passed from a **clean Git archive**, with no
+imports from the private repository; see [the clean-checkout receipt](clean_checkout_cpu.json).
 
 Pixel preprocessing matches the private training-loader/deterministic-evaluation
 reference **bit for bit** for six tested geometry/resolution combinations; see
@@ -26,7 +28,9 @@ reference **bit for bit** for six tested geometry/resolution combinations; see
 matched state/action normalization bitwise and canonical JSON byte-for-byte
 across seven route/hand-availability cases.
 
-**Full-model GPU inference parity is pending compute approval.** No GPU parity
+**Full-model GPU inference parity is pending an available GPU.** The temporary
+validation allocation was rejected by the provider's resource quota; no instance
+was allocated and no existing training was interrupted. No GPU parity
 pass or policy-quality result is claimed here. The GPU fixture covers 19
 cases/94 observations, reset replay, history across the eight-observation window,
 and interleaved sessions with different routes/prompts. Final qualification
