@@ -1,5 +1,10 @@
 # Engram π0.5 and PRISM inference
 
+## Shanghai Coffee PRISM inference
+
+Use [the Coffee setup and client example](prism/COFFEE.md) for the Shanghai
+Coffee 8×H100 run and its step-10,000 or step-20,000 adapters.
+
 ## Engram PRISM model inference
 
 Use branch **`codex/prism-engram-inference`** for the new PRISM model. Its

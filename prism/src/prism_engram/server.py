@@ -21,9 +21,9 @@ METADATA = {
 }
 
 
-def connection_handler(runtime, connection):
+def connection_handler(runtime, connection, *, metadata=METADATA):
     session = runtime.new_session()
-    connection.send(codec.packb(METADATA))
+    connection.send(codec.packb(metadata))
     try:
         for payload in connection:
             started = time.perf_counter()
@@ -61,13 +61,17 @@ def connection_handler(runtime, connection):
         session.reset()
 
 
-def serve(runtime, host: str = "127.0.0.1", port: int = 8000):
+def serve(runtime, host: str = "127.0.0.1", port: int = 8000, *, metadata=METADATA):
     from websockets.sync.server import serve as websocket_serve
 
     with websocket_serve(
-        lambda connection: connection_handler(runtime, connection), host, port, compression=None, max_size=64 * 1024**2
+        lambda connection: connection_handler(runtime, connection, metadata=metadata),
+        host,
+        port,
+        compression=None,
+        max_size=64 * 1024**2,
     ) as server:
-        logging.info("Serving Engram PRISM on %s:%d", host, port)
+        logging.info("Serving %s on %s:%d", metadata["model"], host, port)
         server.serve_forever()
 
 

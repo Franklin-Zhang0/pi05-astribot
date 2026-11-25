@@ -23,6 +23,7 @@ native-conv = ["causal-conv1d==1.6.2.post1", "setuptools==81.0.0", "wheel==0.45.
 
 [project.scripts]
 prism-serve = "prism_engram.server:main"
+prism-coffee-serve = "prism_engram.coffee:main"
 prism-export = "prism_engram.bundle:main"
 
 [dependency-groups]
