@@ -37,33 +37,45 @@ bind address.
 
 ## Stream observations and get actions
 
-Build each request from the latest measured state, three HWC `uint8` RGB images,
-and the Coffee task text. Keep the task text fixed within an episode. Use the
-sensor capture time in seconds for `timestamp_s`.
+Use `PrismClient.observe(observation)` to update camera history without producing
+actions. It sends `"op": "observe"` and returns an acknowledgment with
+`"observed": True`. Use `PrismClient.infer(observation)` to get an action chunk.
+The `decode=False` keyword belongs to the server's internal
+`CoffeeSession.infer()` method. The server sets it when it receives the
+`observe` operation.
+
+Feed the loop one fresh sample every **100 ms**. In this example,
+`sensor_stream` yields the capture timestamp in seconds, three RGB images in main,
+left-wrist, right-wrist order, the measured state, and whether to request a
+new chunk on that tick. Use HWC `uint8` images, an unnormalized 32-channel
+state in Coffee training order, and fixed task text for the episode.
 
 ```python
 from prism_engram.client import PrismClient
 
-observation = {
-    "timestamp_s": capture_time_s,
-    "prompt": task_text,
-    "observation.images.kfc_compressed": main_rgb,
-    "observation.images.camera_l": left_wrist_rgb,
-    "observation.images.camera_r": right_wrist_rgb,
-    "observation.state": measured_state,  # 32 values in Coffee training order
-}
-
 with PrismClient(host="127.0.0.1", port=8000) as client:
     client.reset(seed=0)
-    actions = client.infer(observation)["actions"]  # (32 time steps, 32 channels)
+
+    for timestamp_s, (main_rgb, left_wrist_rgb, right_wrist_rgb), state, request_chunk in sensor_stream:
+        observation = {
+            "timestamp_s": timestamp_s,
+            "prompt": task_text,
+            "observation.images.kfc_compressed": main_rgb,
+            "observation.images.camera_l": left_wrist_rgb,
+            "observation.images.camera_r": right_wrist_rgb,
+            "observation.state": state,
+        }
+        if request_chunk:
+            actions = client.infer(observation)["actions"]  # (32 time steps, 32 channels)
+            submit_plan(actions)  # Hand off to the controller without waiting for playback.
+        else:
+            client.observe(observation)  # Update history while the current plan executes.
 ```
 
-In deployment, keep that connection open and send one fresh observation every
-**100 ms**. Call `infer()` on ticks where you need a new plan and `observe()` on
-the other ticks, including while the current plan is executing. A full action
-chunk lasts about **1.07 seconds**. Waiting until it ends to send another
-observation exceeds the server's 50–150 ms interval. The client calls are
-synchronous, so keep robot command playback independent of the request loop.
+A full action chunk lasts about **1.07 seconds**. Keep sending observations
+during playback to stay within the server's 50–150 ms interval between capture
+timestamps. The client calls are synchronous, so keep robot command playback
+independent of the request loop.
 
 The server pairs the previous camera frames with the current frames and builds
 the model's positions for that two-frame window. After `reset()`, it uses the
