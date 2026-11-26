@@ -42,14 +42,14 @@ METADATA = {
 }
 
 
-def vector(value, width: int, name: str) -> np.ndarray:
+def vector(value, width: int, name: str, *, dtype=np.float32) -> np.ndarray:
     array = np.asarray(value)
     if array.shape != (width,) or array.dtype.kind not in "iuf":
         raise ValueError(f"{name} must be a numeric vector of length {width}")
     with np.errstate(over="ignore"):
-        array = array.astype(np.float32)
+        array = array.astype(dtype)
     if not np.isfinite(array).all():
-        raise ValueError(f"{name} must be finite in float32")
+        raise ValueError(f"{name} must be finite in {np.dtype(dtype).name}")
     return array
 
 

@@ -1,88 +1,83 @@
-# Shanghai Coffee PRISM inference
+# Astribot mobile PRISM inference
 
-Serve the Shanghai Coffee `step-020000.pt` checkpoint and stream observations
-to it over WebSocket. Each prediction returns 32 action rows at 30 Hz.
-
-## Prerequisites
-
-- A Linux x86-64 machine with Python 3.12.12, `uv`, and an NVIDIA GPU with a
-  CUDA 12.8-compatible driver. Building the native convolution extension may
-  require the CUDA toolkit.
-- The checkpoint-compatible `UVA_Finetune` checkout and the Coffee
-  `step-020000.pt` adapter.
-- The original PRISM `checkpoint-50000` directory with `config.json`,
-  `model.pt`, `dmuon_master.pt`, and `fsdp2_dmuon_manifest.json`.
-- The local Qwen3.5-2B-Base snapshot and a Hugging Face cache containing the
-  pinned C-RADIOv4-SO400M snapshot used for training.
+Serve the full Astribot mobile fine-tune (`checkpoint-20000`, run ending in
+`20261125-r2`) over OpenPI WebSocket. The server uses the checkpoint's
+robot-frame flow head and Astribot TRAIN statistics for both arms, grippers
+and the mobile base.
 
 ## Start the server
 
+Use Linux x86-64, Python 3.12.12, `uv`, and an NVIDIA GPU with a CUDA
+12.8-compatible driver. The native convolution extension may require the CUDA
+toolkit to build. Have the full checkpoint directory (`config.json` and
+`model.pt`) and the UVA checkout used to train it at revision
+`e86fa607c02e40d21af75df2f33b472c32a63b9f`. An unpacked training source
+archive from that revision also works as the UVA directory.
+
 ```bash
-git clone --branch codex/prism-coffee-inference --single-branch \
+git clone --single-branch --branch codex/prism-astribot-mobile-inference \
   https://github.com/Franklin-Zhang0/pi05-astribot.git
 cd pi05-astribot/prism
 uv sync --locked --extra native-conv
-
-HF_HUB_OFFLINE=1 HF_HUB_CACHE=/path/to/huggingface/hub \
-  uv run --no-sync prism-coffee-serve \
-    --fine-tune-dir /path/to/UVA_Finetune \
-    --base-checkpoint /path/to/checkpoint-50000 \
-    --checkpoint /path/to/step-020000.pt \
-    --qwen-assets /path/to/Qwen3.5-2B-Base \
-    --device cuda:0 --port 8000
+HF_HUB_OFFLINE=1 uv run --no-sync prism-astribot-serve \
+  --checkpoint /path/to/checkpoint-20000 --uva-dir /path/to/UVA
 ```
 
-The server listens on `127.0.0.1` by default. Use `--host` to set a different
-bind address.
+The command uses `cuda:0` and listens on `127.0.0.1:8000` by default. Set
+`--host`, `--port` or `--device` as needed. `PRISM_UVA_DIR` can supply the UVA
+path. If moving the checkpoint to a different host, set `HF_HUB_CACHE` to a
+cache with the pinned NVIDIA C-RADIOv4-SO400M snapshot. Pass `--qwen-assets`
+and `--fast-assets` if the checkpoint's recorded paths to the pinned
+Qwen3.5-2B-Base snapshot and FAST tokenizer are unavailable.
 
-## Stream observations and get actions
+## Stream observations
 
-Use `PrismClient.observe(observation)` to update camera history without producing
-actions. It sends `"op": "observe"` and returns an acknowledgment with
-`"observed": True`. Use `PrismClient.infer(observation)` to get an action chunk.
-The `decode=False` keyword belongs to the server's internal
-`CoffeeSession.infer()` method. The server sets it when it receives the
-`observe` operation.
-
-Feed the loop one fresh sample every **100 ms**. In this example,
-`sensor_stream` yields the capture timestamp in seconds, three RGB images in main,
-left-wrist, right-wrist order, the measured state, and whether to request a
-new chunk on that tick. Use HWC `uint8` images, an unnormalized 32-channel
-state in Coffee training order, and fixed task text for the episode.
+Send one capture at **10 Hz**, including while a previous chunk is in use.
+`observe()` advances recurrent state without sampling. `infer()` advances
+the same state and returns a **32-step plan at 20 Hz** (1.6 seconds). Start
+with `reset()` at each episode boundary, after reconnecting, or after a
+timestamp gap. Current task and subtask strings become the checkpoint's JSON
+prefix. A changed prefix updates in place while visual history is retained.
 
 ```python
 from prism_engram.client import PrismClient
 
-with PrismClient(host="127.0.0.1", port=8000) as client:
+with PrismClient() as client:
     client.reset(seed=0)
-
-    for timestamp_s, (main_rgb, left_wrist_rgb, right_wrist_rgb), state, request_chunk in sensor_stream:
-        observation = {
-            "timestamp_s": timestamp_s,
-            "prompt": task_text,
-            "observation.images.kfc_compressed": main_rgb,
-            "observation.images.camera_l": left_wrist_rgb,
-            "observation.images.camera_r": right_wrist_rgb,
-            "observation.state": state,
-        }
-        if request_chunk:
-            actions = client.infer(observation)["actions"]  # (32 time steps, 32 channels)
-            submit_plan(actions)  # Hand off to the controller without waiting for playback.
-        else:
-            client.observe(observation)  # Update history while the current plan executes.
+    # sample contains the current capture and measured robot state.
+    observation = {
+        "timestamp_s": sample.timestamp_s,
+        "stereo_left": sample.left_eye_rgb,        # HWC uint8 RGB
+        "head_rgb": sample.head_rgb,               # fallback if left stereo is absent
+        "left_wrist": sample.left_wrist_rgb,       # optional
+        "right_wrist": sample.right_wrist_rgb,     # optional
+        "eef_pose": sample.eef_pose,               # [left, right] × [x,y,z,qx,qy,qz,qw]
+        "gripper_percent": sample.gripper_percent, # [left, right], 0–100
+        "chassis_xyyaw": sample.chassis_xyyaw,     # SDK local accumulator [m,m,rad]
+        "previous_chassis_xyyaw": sample.previous_chassis_xyyaw,
+        "subtask": "Put the cup in the box.",
+    }
+    if request_chunk:
+        plan = client.infer(observation)
+    else:
+        client.observe(observation)
 ```
 
-A full action chunk lasts about **1.07 seconds**. Keep sending observations
-during playback to stay within the server's 50–150 ms interval between capture
-timestamps. The client calls are synchronous, so keep robot command playback
-independent of the request loop.
+Use the same chassis-relative controller basis as the recordings for EEF
+poses. Supply the **left eye** as a single, correctly oriented RGB image.
+Leave a missing camera absent or `None`. `previous_chassis_xyyaw` comes
+from the previous **20 Hz** state tick (50 ms earlier), and may be omitted
+on the first observation. Omit both chassis keys for arm-only inference.
+Use `prompt` for an optional task-level instruction and `subtask` for
+the current subtask. An empty subtask matches training's empty subtask field.
 
-The server pairs the previous camera frames with the current frames and builds
-the model's positions for that two-frame window. After `reset()`, it uses the
-first frames for both slots. Reset the inference session at episode start,
-after a gap or reconnect, or when the task changes. This reset clears the
-server's observation history.
+| Reply field | Shape | Meaning |
+|---|---|---|
+| `eef_pose` | `[32, 2, 7]` | Absolute XYZ in metres and XYZW quaternions in the input controller basis, left then right |
+| `gripper_percent` | `[32, 2]` | Absolute gripper targets, left then right |
+| `chassis_xyyaw` | `[32, 3]` or `None` | Absolute targets in the SDK local accumulator, using the current observed chassis anchor |
+| `timestamp_s` | scalar | Capture time of the observation used as the chunk anchor |
 
-`actions[i]` is the 32-channel command for time step `i`. The server
-denormalizes it into the training data's original channel order and units.
-Use the Coffee feature metadata to map those channels to the controller.
+The server only returns predictions. Chassis quality was not established
+by the fine-tune's held-out metrics. Inspect replayed output before
+connecting the planner to a robot controller.
