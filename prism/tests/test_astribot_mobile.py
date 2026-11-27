@@ -1,5 +1,9 @@
 """Astribot inference geometry and stateful WebSocket contract."""
 
+import hashlib
+import json
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -11,6 +15,17 @@ from prism_engram.astribot_mobile import (
     decode_actions,
     pack_proprio,
 )
+
+
+def test_packaged_astribot_graph_matches_source_manifest():
+    root = Path(__file__).resolve().parents[1]
+    manifest = json.loads((root / "astribot_runtime_source_manifest.json").read_text())
+    graph = root / "src" / "prism_astribot_vla"
+    assert manifest["source_commit"] == "e86fa607c02e40d21af75df2f33b472c32a63b9f"
+    assert (graph / "modeling" / "token_reduction.py").is_file()
+    assert {str(path.relative_to(root / "src")) for path in graph.rglob("*.py")} == set(manifest["files"])
+    for name, record in manifest["files"].items():
+        assert hashlib.sha256((root / "src" / name).read_bytes()).hexdigest() == record["release_sha256"]
 
 
 def measurement(t=0.0):

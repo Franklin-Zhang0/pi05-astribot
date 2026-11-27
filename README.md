@@ -10,25 +10,23 @@ and the mobile base.
 Use Linux x86-64, Python 3.12.12, `uv`, and an NVIDIA GPU with a CUDA
 12.8-compatible driver. The native convolution extension may require the CUDA
 toolkit to build. Have the full checkpoint directory (`config.json` and
-`model.pt`) and the UVA checkout used to train it at revision
-`e86fa607c02e40d21af75df2f33b472c32a63b9f`. An unpacked training source
-archive from that revision also works as the UVA directory.
+`model.pt`). The branch includes the matching token-reduction model code.
 
 ```bash
 git clone --single-branch --branch codex/prism-astribot-mobile-inference \
   https://github.com/Franklin-Zhang0/pi05-astribot.git
 cd pi05-astribot/prism
 uv sync --locked --extra native-conv
-HF_HUB_OFFLINE=1 uv run --no-sync prism-astribot-serve \
-  --checkpoint /path/to/checkpoint-20000 --uva-dir /path/to/UVA
+uv run --no-sync prism-astribot-serve --checkpoint /path/to/checkpoint-20000
 ```
 
 The command uses `cuda:0` and listens on `127.0.0.1:8000` by default. Set
-`--host`, `--port` or `--device` as needed. `PRISM_UVA_DIR` can supply the UVA
-path. If moving the checkpoint to a different host, set `HF_HUB_CACHE` to a
-cache with the pinned NVIDIA C-RADIOv4-SO400M snapshot. Pass `--qwen-assets`
-and `--fast-assets` if the checkpoint's recorded paths to the pinned
-Qwen3.5-2B-Base snapshot and FAST tokenizer are unavailable.
+`--host`, `--port` or `--device` as needed. The first launch resolves pinned
+Qwen configuration and tokenizer files, FAST tokenizer files, and the frozen
+NVIDIA C-RADIOv4-SO400M encoder from Hugging Face. The checkpoint supplies
+both Qwen text towers' weights. For an offline host, point `HF_HUB_CACHE`
+at a cache containing these files and set `HF_HUB_OFFLINE=1`. You can also
+provide local metadata directories with `--qwen-assets` and `--fast-assets`.
 
 ## Stream observations
 

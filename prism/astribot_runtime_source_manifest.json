@@ -1,0 +1,376 @@
+{
+  "schema": "prism-inference-source-v1",
+  "source_commit": "e86fa607c02e40d21af75df2f33b472c32a63b9f",
+  "files": {
+    "prism_astribot_vla/__init__.py": {
+      "source": "prism_vla/__init__.py",
+      "source_sha256": "8bca982e9eaa2352f8df389b62ebe97185bfec708e08846e6bd3905942d506a4",
+      "release_sha256": "95bc558ec10fa503e5c3334d6c61ac31f62d967a4b9194bbf03b0e5ed9165f4c"
+    },
+    "prism_astribot_vla/data/__init__.py": {
+      "source": "prism_vla/data/__init__.py",
+      "source_sha256": "7eee8c94fcc504a2e569d8e8a45672a7127636c754bb7ba224bab0654eb8d584",
+      "release_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "prism_astribot_vla/data/datasets/__init__.py": {
+      "source": "prism_vla/data/datasets/__init__.py",
+      "source_sha256": "7ca2c2437028836ade166b50ef88723b7cb3559d629e9041989137536e2b4855",
+      "release_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "prism_astribot_vla/data/datasets/cotrain_contract.py": {
+      "source": "prism_vla/data/datasets/cotrain_contract.py",
+      "source_sha256": "74a84216ab8b2dac28eedef130da63cdef2c718c108be0b7e4113d1dae51d69d",
+      "release_sha256": "7d169210ee5c688d758f69f9ace05feb450b792446e8249881926a3721b49007"
+    },
+    "prism_astribot_vla/data/datasets/ego_action_normalization.py": {
+      "source": "prism_vla/data/datasets/ego_action_normalization.py",
+      "source_sha256": "91a069fcd7dc7a45da2fd760caac3738c56961bac7f0d23a24bb398c60a5ad89",
+      "release_sha256": "91a069fcd7dc7a45da2fd760caac3738c56961bac7f0d23a24bb398c60a5ad89"
+    },
+    "prism_astribot_vla/data/datasets/ego_action_representation.py": {
+      "source": "prism_vla/data/datasets/ego_action_representation.py",
+      "source_sha256": "da84a5f3c39417395cc6a780dd9dfa21fb58ee1083eaee92c7928175e0ed8f23",
+      "release_sha256": "c31984998c66050fb0a08e739c4ebd425ef2d3e78ddfdb86d12b60f749768664"
+    },
+    "prism_astribot_vla/data/datasets/ego_schema.py": {
+      "source": "prism_vla/data/datasets/ego_schema.py",
+      "source_sha256": "b01d9168b5090b03ff1c26b3224f63aea865ad35eb010621855df0765c05df66",
+      "release_sha256": "b01d9168b5090b03ff1c26b3224f63aea865ad35eb010621855df0765c05df66"
+    },
+    "prism_astribot_vla/data/datasets/robot_action_normalization.py": {
+      "source": "prism_vla/data/datasets/robot_action_normalization.py",
+      "source_sha256": "b23d867dec99077273a9cadbfcfa1269f6d933ef9f9c8649ae0a02849142e990",
+      "release_sha256": "b23d867dec99077273a9cadbfcfa1269f6d933ef9f9c8649ae0a02849142e990"
+    },
+    "prism_astribot_vla/data/datasets/robot_proprio_normalization.py": {
+      "source": "prism_vla/data/datasets/robot_proprio_normalization.py",
+      "source_sha256": "bb260500b4da35c736b0b7f44422c7f62ced3326fd61b01ced3cab59b7df9a54",
+      "release_sha256": "5e8bc8a292db44ccea45c57c316e8535c2c7dcbc88203769c1627de402ce0e66"
+    },
+    "prism_astribot_vla/data/fast_targets.py": {
+      "source": "prism_vla/data/fast_targets.py",
+      "source_sha256": "234d1985e7a816f3da68f702792aedd83ae7e0db5a926a42839531a5b4edd4b4",
+      "release_sha256": "7bd00c5db05ba8b07f8c2d4c6cddb388d713f061d027d4b526e0865cbda89252"
+    },
+    "prism_astribot_vla/data/fast_tokenizer.py": {
+      "source": "prism_vla/data/fast_tokenizer.py",
+      "source_sha256": "b46f35e21d1a454bf77cdc0c99a09ec3c5f20d2e64c9f8a247b822ec8d3a1a02",
+      "release_sha256": "b46f35e21d1a454bf77cdc0c99a09ec3c5f20d2e64c9f8a247b822ec8d3a1a02"
+    },
+    "prism_astribot_vla/data/future_cls.py": {
+      "source": "prism_vla/data/future_cls.py",
+      "source_sha256": "11f52bcbb80dad871bb31753dfea92ba72c38e2b022845897e39cc642526a2da",
+      "release_sha256": "11f52bcbb80dad871bb31753dfea92ba72c38e2b022845897e39cc642526a2da"
+    },
+    "prism_astribot_vla/data/instruction_conditioning.py": {
+      "source": "prism_vla/data/instruction_conditioning.py",
+      "source_sha256": "7004e54667b1007d0423800708bed06d426200fe1bd7cb539ac713a1f29fac2a",
+      "release_sha256": "7004e54667b1007d0423800708bed06d426200fe1bd7cb539ac713a1f29fac2a"
+    },
+    "prism_astribot_vla/modeling/__init__.py": {
+      "source": "prism_vla/modeling/__init__.py",
+      "source_sha256": "3b6e94320972a6aabd3d84b6661a8d12341bebd011a7f3f8c50ec5f9ed36d869",
+      "release_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "prism_astribot_vla/modeling/act_observer.py": {
+      "source": "prism_vla/modeling/act_observer.py",
+      "source_sha256": "5d40e15640459380b2af4c728941970d2e2137f21c6c28fcc9ef8732b379ed1f",
+      "release_sha256": "5d40e15640459380b2af4c728941970d2e2137f21c6c28fcc9ef8732b379ed1f"
+    },
+    "prism_astribot_vla/modeling/action_expert_cache.py": {
+      "source": "prism_vla/modeling/action_expert_cache.py",
+      "source_sha256": "ae843558934b571c2e09f9fa7491dbbd90ceb9703c3338e01e82e1f0ab2788bd",
+      "release_sha256": "ae843558934b571c2e09f9fa7491dbbd90ceb9703c3338e01e82e1f0ab2788bd"
+    },
+    "prism_astribot_vla/modeling/action_head_config.py": {
+      "source": "prism_vla/modeling/action_head_config.py",
+      "source_sha256": "4a0c32829d3840e279011db35ddc8f03f7358cd243d635921623708d38583c14",
+      "release_sha256": "e39e9e4b627d2dec3be133a5beacdd55c179a94f09914a5ebb83cdc263238c27"
+    },
+    "prism_astribot_vla/modeling/action_latent.py": {
+      "source": "prism_vla/modeling/action_latent.py",
+      "source_sha256": "dad5ca2bd8cb8ec90b9f91849c73a95f6a88f7d71284ea395f948af4e66536c6",
+      "release_sha256": "d0d0ddad21a2d7ca38fc2f5f3234cbceab907304a8447b074e9bdc337dd2fa32"
+    },
+    "prism_astribot_vla/modeling/action_layout.py": {
+      "source": "prism_vla/modeling/action_layout.py",
+      "source_sha256": "abca10078b9a47f465d23a62eba46899d714fa37dfc3f6c0957a0413ad193b11",
+      "release_sha256": "c2eb230e3178725a9067a92b904c2805c3089fa3954e152cd62cc6ce2442b8e0"
+    },
+    "prism_astribot_vla/modeling/action_patch.py": {
+      "source": "prism_vla/modeling/action_patch.py",
+      "source_sha256": "f33c986e3b45a60c7ec7cc23b1b70d5bfcb884dc7e813e19652216f3a6bc58d3",
+      "release_sha256": "1f1d5c877cce3381929b1d150924f1c6871a4cfc858b5a5da9b1f60906244c84"
+    },
+    "prism_astribot_vla/modeling/action_patch_output.py": {
+      "source": "prism_vla/modeling/action_patch_output.py",
+      "source_sha256": "ec8d508131f6f394395118ea8ccef576af6f539328cc531af00c456b4bac24d8",
+      "release_sha256": "ec8d508131f6f394395118ea8ccef576af6f539328cc531af00c456b4bac24d8"
+    },
+    "prism_astribot_vla/modeling/attention_policy.py": {
+      "source": "prism_vla/modeling/attention_policy.py",
+      "source_sha256": "1cda5321b24dab650afc7cc17b9963e35616881868520e9aca1eec95788defb6",
+      "release_sha256": "e185fb01c6c21c5eddacbbc40f67375e5a8651c14f64b136b177b03609590191"
+    },
+    "prism_astribot_vla/modeling/backbone_layers.py": {
+      "source": "prism_vla/modeling/backbone_layers.py",
+      "source_sha256": "13ac5bd048382216572a41c1a0b17bfcc2609c9696ca9ddbf49cfbb6789412ea",
+      "release_sha256": "13ac5bd048382216572a41c1a0b17bfcc2609c9696ca9ddbf49cfbb6789412ea"
+    },
+    "prism_astribot_vla/modeling/camera_compact.py": {
+      "source": "prism_vla/modeling/camera_compact.py",
+      "source_sha256": "f1c2f0f05bcb962d64e4d781151deb5a8dc80ddbcfd3141a54aa5aa263ac0127",
+      "release_sha256": "f3f63cf48f922e81c016ef84941b28e08cd76e409bdef303fc771dd8b32c2255"
+    },
+    "prism_astribot_vla/modeling/camera_layout.py": {
+      "source": "prism_vla/modeling/camera_layout.py",
+      "source_sha256": "81ab536981cd24136b5c6bffef356945f4d93216ac008efe5a23bc0349515edd",
+      "release_sha256": "546a2976add5ef6b228c680085c38001cc86fafc0ad3406fdd456bd41297033c"
+    },
+    "prism_astribot_vla/modeling/camera_reconstruction.py": {
+      "source": "prism_vla/modeling/camera_reconstruction.py",
+      "source_sha256": "51455b355dc70942272378d381d82ce5ac9d198f5e52056912b3c55365abc73c",
+      "release_sha256": "51455b355dc70942272378d381d82ce5ac9d198f5e52056912b3c55365abc73c"
+    },
+    "prism_astribot_vla/modeling/camera_token_budget.py": {
+      "source": "prism_vla/modeling/camera_token_budget.py",
+      "source_sha256": "949a177966c4346ab21f193c295413e1ba255b725bff99db2255d44fc6a494e1",
+      "release_sha256": "949a177966c4346ab21f193c295413e1ba255b725bff99db2255d44fc6a494e1"
+    },
+    "prism_astribot_vla/modeling/checkpoint_compat.py": {
+      "source": "prism_vla/modeling/checkpoint_compat.py",
+      "source_sha256": "af131b8d66ce81254f3d1ce6633c7c299fb3f4f5a328abe29c651c89aa35205d",
+      "release_sha256": "2173481fe4987f35fdba2d0ab12e560f263138cec9eeb6626059e38388225c04"
+    },
+    "prism_astribot_vla/modeling/checkpointing.py": {
+      "source": "prism_vla/modeling/checkpointing.py",
+      "source_sha256": "d77bb92a772b2fb701f185ffc08987926f35e8f3603f1372f54b5071682f7280",
+      "release_sha256": "6994a4f9995581a88e2d4a2da593149d125f1486f19a7cf78a6dcd7fabc59e99"
+    },
+    "prism_astribot_vla/modeling/condition_mask.py": {
+      "source": "prism_vla/modeling/condition_mask.py",
+      "source_sha256": "11534420d6aeb214b9a66b3fece9f3fd60439b6cb6a4c94851bf6b528f711633",
+      "release_sha256": "11534420d6aeb214b9a66b3fece9f3fd60439b6cb6a4c94851bf6b528f711633"
+    },
+    "prism_astribot_vla/modeling/config.py": {
+      "source": "prism_vla/modeling/config.py",
+      "source_sha256": "02d4ad92049dde78b7abf5da1634f528789ac950c509bde543367ae3118d8b85",
+      "release_sha256": "a68b4ecb7ddf3a1e94d0bc23964291faf7a955b6f11bae4aae9e8622ce4a9254"
+    },
+    "prism_astribot_vla/modeling/direct_query.py": {
+      "source": "prism_vla/modeling/direct_query.py",
+      "source_sha256": "e689085bde430b46c10cbcdbbaa20b0791ef6efe49701c4e9b9ebfbf8e245e6f",
+      "release_sha256": "e689085bde430b46c10cbcdbbaa20b0791ef6efe49701c4e9b9ebfbf8e245e6f"
+    },
+    "prism_astribot_vla/modeling/direct_query_stream.py": {
+      "source": "prism_vla/modeling/direct_query_stream.py",
+      "source_sha256": "402b7ba690d12207f0bd0e555bfecb9f84d1e47581343c3f76547f059d5ea168",
+      "release_sha256": "b6bbc9b673eb13bcf131c9bb322025bc08fd2411deb0b59105082be4dcf152b3"
+    },
+    "prism_astribot_vla/modeling/ego_weak_supervision.py": {
+      "source": "prism_vla/modeling/ego_weak_supervision.py",
+      "source_sha256": "ed43413b58ff4c5ce2208e3dad25004d5ba1af510beeff0d4817d4beea62a5ec",
+      "release_sha256": "ed43413b58ff4c5ce2208e3dad25004d5ba1af510beeff0d4817d4beea62a5ec"
+    },
+    "prism_astribot_vla/modeling/engram_finetune.py": {
+      "source": "prism_vla/modeling/engram_finetune.py",
+      "source_sha256": "611d8fc232111a36ae789d7fb66a6853d105e7b03468779ea76595451821ce0e",
+      "release_sha256": "83506682b2e242f585c0f51e208e474bf002629ab48dfac0a39cd8d6fdf0e688"
+    },
+    "prism_astribot_vla/modeling/engram_native.py": {
+      "source": "prism_vla/modeling/engram_native.py",
+      "source_sha256": "26949f35c91c49b93e46ef1c4a4fd282a889649ed625f9bda27d9630ec760bc5",
+      "release_sha256": "2c78c4c90d12fb88bf09be36b08240fe76b388868e64a6624ef48bdee3c77ab9"
+    },
+    "prism_astribot_vla/modeling/fast_attention.py": {
+      "source": "prism_vla/modeling/fast_attention.py",
+      "source_sha256": "a153fb8e471109915cf7d6356aa1517805155fc1961a87d5f978a4ccfaefd65e",
+      "release_sha256": "a153fb8e471109915cf7d6356aa1517805155fc1961a87d5f978a4ccfaefd65e"
+    },
+    "prism_astribot_vla/modeling/fast_loss.py": {
+      "source": "prism_vla/modeling/fast_loss.py",
+      "source_sha256": "3caca2b7450f4b14ff9b7ab72bd5c5c327e81dea6eeb7620adfc37aeb456bf6d",
+      "release_sha256": "3caca2b7450f4b14ff9b7ab72bd5c5c327e81dea6eeb7620adfc37aeb456bf6d"
+    },
+    "prism_astribot_vla/modeling/forward.py": {
+      "source": "prism_vla/modeling/forward.py",
+      "source_sha256": "1d98e401331e6caea61df997898ec7a41cf179e3057875d8331c55b7fcf297d7",
+      "release_sha256": "5562808076144ce4e615fd90c59761255333a17f6be111828e3f8ad88c1a2259"
+    },
+    "prism_astribot_vla/modeling/idm_attention_cache.py": {
+      "source": "prism_vla/modeling/idm_attention_cache.py",
+      "source_sha256": "3d01a030964606482e3d85b892bd66f4ecc4c7d7159caa5184d1d2d4b897c819",
+      "release_sha256": "3d01a030964606482e3d85b892bd66f4ecc4c7d7159caa5184d1d2d4b897c819"
+    },
+    "prism_astribot_vla/modeling/idm_backends.py": {
+      "source": "prism_vla/modeling/idm_backends.py",
+      "source_sha256": "9524f79df15478a63801b7c380f3ce260b2d193301e7a1c5172cf185fe7623b2",
+      "release_sha256": "dff8693aaee256939c6e4706bcd5ac21798f69dd4b065cd98c98ae3989f78850"
+    },
+    "prism_astribot_vla/modeling/idm_muonclip.py": {
+      "source": "prism_vla/modeling/idm_muonclip.py",
+      "source_sha256": "ff049af024c82f36b0a27140f61e6c0c40ee804b8bfb9411269408ec9f9fd3ae",
+      "release_sha256": "68fa76923cbef18bbf614966946d14cd7012004d4553a2a952f1568f4c0f12e2"
+    },
+    "prism_astribot_vla/modeling/idm_qk_control.py": {
+      "source": "prism_vla/modeling/idm_qk_control.py",
+      "source_sha256": "f91db88d589ce4e36a96fe167144b6e71d4f985ef8423dc8c349e6475eae3149",
+      "release_sha256": "02d5f537b1dd9b6136a09fdbae1e5f4b511bbcf8a8516b9bceb5a93fcfa5f8a1"
+    },
+    "prism_astribot_vla/modeling/inference.py": {
+      "source": "prism_vla/modeling/inference.py",
+      "source_sha256": "efc2524cfed26d0a64498fb2e3c38dc1bbca4523eef7353fb55ebbca03a630c5",
+      "release_sha256": "c55ea6e1b4d787b678d14d979e4a1e8a178d0dc3312c03c9bf192a6ff6c8e39a"
+    },
+    "prism_astribot_vla/modeling/instruction_encoder.py": {
+      "source": "prism_vla/modeling/instruction_encoder.py",
+      "source_sha256": "14e078c100e4e65e2a05beeb36de3321a1dc89d60f00f34881c251262d2c71e3",
+      "release_sha256": "1a1daf4c826e4cb9ef2f1db14c3747416e77fe356eb45881d3e8aa6859215945"
+    },
+    "prism_astribot_vla/modeling/latent_norm.py": {
+      "source": "prism_vla/modeling/latent_norm.py",
+      "source_sha256": "6944dc525f7759ad05f607ae12fd714d1a88e6cdffa49f15f72a72465a5cf62f",
+      "release_sha256": "6944dc525f7759ad05f607ae12fd714d1a88e6cdffa49f15f72a72465a5cf62f"
+    },
+    "prism_astribot_vla/modeling/losses.py": {
+      "source": "prism_vla/modeling/losses.py",
+      "source_sha256": "f512f6035721961fb12b4d5071e92acf9c528aaadc3f466eeda56bd6fa528764",
+      "release_sha256": "f512f6035721961fb12b4d5071e92acf9c528aaadc3f466eeda56bd6fa528764"
+    },
+    "prism_astribot_vla/modeling/model.py": {
+      "source": "prism_vla/modeling/model.py",
+      "source_sha256": "59b92df9de1bad393472ad43220afd5f75164802bddcd145ef7d3cd2a9e03029",
+      "release_sha256": "a87c31bca5791658b7c9b9724f0b028898e4b57fcc8ff8eda1ddc9e7a5aec6d8"
+    },
+    "prism_astribot_vla/modeling/multi_action_heads.py": {
+      "source": "prism_vla/modeling/multi_action_heads.py",
+      "source_sha256": "a34981dbd16958145d4c50f132315ee3dcde0be35d6276c5d5a53a0ec8268e66",
+      "release_sha256": "32ff33c1c7fbbda3d9bb0348cb69a189d3a5045c729f1c84053e9588865bf871"
+    },
+    "prism_astribot_vla/modeling/pi05_action_expert.py": {
+      "source": "prism_vla/modeling/pi05_action_expert.py",
+      "source_sha256": "5ad4aea1524631f48a35d11779ee08b9c6d140234245e17738e88613f011789d",
+      "release_sha256": "0b7740d224bd40e2dfc53104a5ba8c89dfd783a171ce73777697f3ee55ea038b"
+    },
+    "prism_astribot_vla/modeling/proprio.py": {
+      "source": "prism_vla/modeling/proprio.py",
+      "source_sha256": "599166282b79dd9b8f8d0bead71aee16c8dacd79d9408eea970db11f4222aeb9",
+      "release_sha256": "599166282b79dd9b8f8d0bead71aee16c8dacd79d9408eea970db11f4222aeb9"
+    },
+    "prism_astribot_vla/modeling/qwen35_deltanet_patch.py": {
+      "source": "prism_vla/modeling/qwen35_deltanet_patch.py",
+      "source_sha256": "c054dcbfeaca9fb9f163be5a92ff9f67242859d4bd4a9bd30ebe842fb13f2565",
+      "release_sha256": "c07ef6b82ba2a64e8b8553325035367b53e635fa6419ff5ea30ce2c002ed1604"
+    },
+    "prism_astribot_vla/modeling/qwen35_kda_scan.py": {
+      "source": "prism_vla/modeling/qwen35_kda_scan.py",
+      "source_sha256": "1198c13dc9672f9d2f13db171dbb8fc887b26d4343829bb4398ea437fe0226e2",
+      "release_sha256": "1198c13dc9672f9d2f13db171dbb8fc887b26d4343829bb4398ea437fe0226e2"
+    },
+    "prism_astribot_vla/modeling/qwen35_timestep_kda.py": {
+      "source": "prism_vla/modeling/qwen35_timestep_kda.py",
+      "source_sha256": "2adb8019a18b9b2b16e507fd70763d4178a467f882b1815dcf9f0d6cca327790",
+      "release_sha256": "3064635fd98b3aa30b302e37ba368f7b4b2fa16bf38e54efcee1e8dab5642cee"
+    },
+    "prism_astribot_vla/modeling/qwen35_timestep_kda_conv.py": {
+      "source": "prism_vla/modeling/qwen35_timestep_kda_conv.py",
+      "source_sha256": "c66d81f516ac67a2d570b618b934905df0aa3830f2a9b95fef1cecdd536238f5",
+      "release_sha256": "1a1c64b66fc20288e3d4c32dc1751f9f17135e5f5af664211ec4870c5e9971df"
+    },
+    "prism_astribot_vla/modeling/qwen35_timestep_kda_kernels.py": {
+      "source": "prism_vla/modeling/qwen35_timestep_kda_kernels.py",
+      "source_sha256": "3825c12f91cbf4200710c505fbf9997a6c080d817ac25816e3c32dd08ee102ac",
+      "release_sha256": "483911df75bc1c4a69640c74c8e6cc2d71c2333bcd1690f83454d5f9cbbbda82"
+    },
+    "prism_astribot_vla/modeling/qwen_activation_offload.py": {
+      "source": "prism_vla/modeling/qwen_activation_offload.py",
+      "source_sha256": "39896e7bb9e743a75b42d91bd923eca6b3c50747acf932c75b4ea767687e4fb8",
+      "release_sha256": "39896e7bb9e743a75b42d91bd923eca6b3c50747acf932c75b4ea767687e4fb8"
+    },
+    "prism_astribot_vla/modeling/qwen_mlp_checkpoint.py": {
+      "source": "prism_vla/modeling/qwen_mlp_checkpoint.py",
+      "source_sha256": "e85bbc4ac3842ac911edaa64f8d91efe3d69e6a3d7afe4fbb0e517162ae0d767",
+      "release_sha256": "8a74176924a2b07689b4ea5c0a689f52f3da40fd48b1ee37df355862758175fc"
+    },
+    "prism_astribot_vla/modeling/qwen_rms_static.py": {
+      "source": "prism_vla/modeling/qwen_rms_static.py",
+      "source_sha256": "c35880d969b69b65943663eec18a83aae6c2dcf091c85917aa3b27b9c5dcf152",
+      "release_sha256": "c35880d969b69b65943663eec18a83aae6c2dcf091c85917aa3b27b9c5dcf152"
+    },
+    "prism_astribot_vla/modeling/runtime.py": {
+      "source": "prism_vla/modeling/runtime.py",
+      "source_sha256": "e86475ba0df09168a0193698719b142fdd575f715ebd0b3396cce4ab37ef02c4",
+      "release_sha256": "2369d48769ed9c5fe06e59118394161759a11aa60e6252da8b12c3c33c03c514"
+    },
+    "prism_astribot_vla/modeling/text_deepstack.py": {
+      "source": "prism_vla/modeling/text_deepstack.py",
+      "source_sha256": "00fed530e18d56a505d9f997bd7a0bfe114c7974f7e310dc5f7d9266f876dc51",
+      "release_sha256": "00fed530e18d56a505d9f997bd7a0bfe114c7974f7e310dc5f7d9266f876dc51"
+    },
+    "prism_astribot_vla/modeling/token_reduction.py": {
+      "source": "prism_vla/modeling/token_reduction.py",
+      "source_sha256": "17438823a48dcfe3f52b44212cc6945e19e6422be981f2e26c199bf32ca63e6b",
+      "release_sha256": "173f7fd17f4f3d826ddbd6676d22fadff57b73798810e35a9ee8ef77b4e45f0b"
+    },
+    "prism_astribot_vla/modeling/token_reduction_backbone.py": {
+      "source": "prism_vla/modeling/token_reduction_backbone.py",
+      "source_sha256": "1b92317779e2c9add8772a788fa03adf8f93628f5a09297bbeeb8344355f671b",
+      "release_sha256": "bb9b35237d256dcd32a68076802cc7818943610c3507e7dc57128523a64e375c"
+    },
+    "prism_astribot_vla/modeling/token_reduction_config.py": {
+      "source": "prism_vla/modeling/token_reduction_config.py",
+      "source_sha256": "383d8e6264d418c81dffe3f8edbb20bff5cfe2ba378cd372e0120e067a442d14",
+      "release_sha256": "383d8e6264d418c81dffe3f8edbb20bff5cfe2ba378cd372e0120e067a442d14"
+    },
+    "prism_astribot_vla/modeling/token_reduction_layout.py": {
+      "source": "prism_vla/modeling/token_reduction_layout.py",
+      "source_sha256": "29e716c9c3f5c8b07b6dd28930f828d5afab54c4778a6a82cd8d8ced7fef110f",
+      "release_sha256": "29e716c9c3f5c8b07b6dd28930f828d5afab54c4778a6a82cd8d8ced7fef110f"
+    },
+    "prism_astribot_vla/modeling/token_reduction_varlen.py": {
+      "source": "prism_vla/modeling/token_reduction_varlen.py",
+      "source_sha256": "75777104ee1c250ced246ec764a18d979f8ef5a98c5f73319ab56aa0f69073dc",
+      "release_sha256": "75777104ee1c250ced246ec764a18d979f8ef5a98c5f73319ab56aa0f69073dc"
+    },
+    "prism_astribot_vla/modeling/visual_fusion.py": {
+      "source": "prism_vla/modeling/visual_fusion.py",
+      "source_sha256": "af507b6c62ba0b5493966731c976aa7c6f4c8835bbe25d9ef25cd863bbfb140a",
+      "release_sha256": "af507b6c62ba0b5493966731c976aa7c6f4c8835bbe25d9ef25cd863bbfb140a"
+    },
+    "prism_astribot_vla/modeling/vlm_snapshot_schedule.py": {
+      "source": "prism_vla/modeling/vlm_snapshot_schedule.py",
+      "source_sha256": "02e264519846fcdbd39fae07fd711f508206fe5f3baca2de018f0198f2aa566d",
+      "release_sha256": "54a628efd2f4a6c1d679b4ee7c9e58056176d7949af0c926a3b02724ca82c516"
+    },
+    "prism_astribot_vla/perception/__init__.py": {
+      "source": "prism_vla/perception/__init__.py",
+      "source_sha256": "8e99ad2249f710471638c916205a825a4d85699021df6cd108d6f0a5048b57fe",
+      "release_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "prism_astribot_vla/perception/encoders/__init__.py": {
+      "source": "prism_vla/perception/encoders/__init__.py",
+      "source_sha256": "fd123584bbf54c20f7188f2d7a92d4267733745f69c9abb502ed8c7dc363f155",
+      "release_sha256": "be6915ad0f5a5b8f4f37b3c9516dfd8e8eb9b013fd99e32c8ab53abc958b862f"
+    },
+    "prism_astribot_vla/perception/encoders/cradio.py": {
+      "source": "prism_vla/perception/encoders/cradio.py",
+      "source_sha256": "cf5f583a0e839768b1a10802813bf0e4b50e628fdac40598d4d244c38bab6a61",
+      "release_sha256": "cf5f583a0e839768b1a10802813bf0e4b50e628fdac40598d4d244c38bab6a61"
+    },
+    "prism_astribot_vla/perception/encoders/dino.py": {
+      "source": "prism_vla/perception/encoders/dino.py",
+      "source_sha256": "73ac5a7fd2b4047af6ead95a3f9a81f209f3ccffed563de10b17f201eb723cb0",
+      "release_sha256": "73ac5a7fd2b4047af6ead95a3f9a81f209f3ccffed563de10b17f201eb723cb0"
+    },
+    "prism_astribot_vla/perception/encoders/semantic.py": {
+      "source": "prism_vla/perception/encoders/semantic.py",
+      "source_sha256": "9211b73baa3465d60bdb7f87deda73372f2284af4280b0aefeb8df4195c6b91e",
+      "release_sha256": "9211b73baa3465d60bdb7f87deda73372f2284af4280b0aefeb8df4195c6b91e"
+    },
+    "prism_astribot_vla/transition_rows.py": {
+      "source": "prism_vla/transition_rows.py",
+      "source_sha256": "28d3480bf14620007c2f5530e3bcab635516d53bf965b701f17de02c37cf4241",
+      "release_sha256": "28d3480bf14620007c2f5530e3bcab635516d53bf965b701f17de02c37cf4241"
+    }
+  }
+}

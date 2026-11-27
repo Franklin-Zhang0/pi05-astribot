@@ -1,5 +1,18 @@
 # Inference runtime provenance
 
+The Astribot mobile entrypoint uses `src/prism_astribot_vla`. This package
+contains the Python inference graph selected from checkpoint training
+revision `e86fa607c02e40d21af75df2f33b472c32a63b9f`, including fixed
+token selection, rolling attention, timestep KDA, text DeepStack and the
+action heads. `astribot_runtime_source_manifest.json` records the source and
+packaged hashes. The adaptations isolate imports from the older Engram
+runtime, omit training entrypoints and label builders, and construct the two
+Qwen text towers from configuration before strict checkpoint restoration.
+C-RADIO weights are resolved separately from the pinned upstream revision
+because the training run kept its vision encoder outside the checkpoint.
+
+## Engram runtime
+
 `src/prism_vla` contains the selected model construction, perception, action
 geometry, recurrent cache and inference dependencies of the trained PRISM
 snapshot. It contains no Trainer, dataset reader, training entrypoint, launch

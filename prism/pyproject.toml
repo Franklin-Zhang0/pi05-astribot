@@ -49,10 +49,11 @@ url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/prism_engram", "src/prism_vla"]
+packages = ["src/prism_engram", "src/prism_vla", "src/prism_astribot_vla"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "runtime_source_manifest.json" = "prism_engram/runtime_source_manifest.json"
+"astribot_runtime_source_manifest.json" = "prism_engram/astribot_runtime_source_manifest.json"
 "RUNTIME_SOURCES.md" = "prism_engram/RUNTIME_SOURCES.md"
 
 [tool.pytest.ini_options]

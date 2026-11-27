@@ -6,8 +6,6 @@ import argparse
 import json
 import logging
 import math
-import os
-import sys
 from contextlib import nullcontext
 from numbers import Real
 from pathlib import Path
@@ -18,7 +16,7 @@ import torch
 from scipy.spatial.transform import Rotation
 
 from prism_engram.adapter import rotation_6d_to_matrix
-from prism_engram.bundle import restore_model_weights
+from prism_engram.bundle import CRADIO_REVISION, FAST_REVISION, QWEN_REVISION, restore_model_weights
 from prism_engram.coffee import vector
 from prism_engram.runtime import training_image
 
@@ -62,6 +60,9 @@ def checkpoint_statistics(config: dict) -> tuple[np.ndarray, np.ndarray, float]:
         or config.get("num_dino_cameras") != 3
         or config.get("dino_camera_fusion") != "concat"
         or config.get("visual_encoder_type") != "cradio"
+        or config.get("visual_encoder_model_name") != "nvidia/C-RADIOv4-SO400M"
+        or config.get("visual_encoder_revision") != CRADIO_REVISION
+        or config.get("instruction_encoder_revision") != QWEN_REVISION
         or head.get("type") != "flow_matching"
         or representation != head.get("action_representation")
         or (representation.get("frame"), representation.get("frame_anchor"), representation.get("target"))
@@ -92,17 +93,14 @@ def checkpoint_statistics(config: dict) -> tuple[np.ndarray, np.ndarray, float]:
     return mean, std, position_scale
 
 
-def bind_uva(root: Path) -> None:
-    """Load the checkpoint-compatible UVA package ahead of the bundled Coffee-era graph."""
-    source = (root / "src").resolve()
-    if not (source / "prism_vla/modeling/token_reduction.py").is_file():
-        raise ValueError("--uva-dir must point to the checkpoint-compatible UVA checkout")
-    for name, module in tuple(sys.modules.items()):
-        if name == "prism_vla" or name.startswith("prism_vla."):
-            filename = getattr(module, "__file__", None)
-            if filename is None or not Path(filename).resolve().is_relative_to(source):
-                raise RuntimeError("A different prism_vla runtime is loaded. Start a fresh process.")
-    sys.path.insert(0, str(source))
+def model_assets(local_path: Path | None, repo: str, revision: str, files: tuple[str, ...]) -> str:
+    """Use explicit local assets or resolve the released pinned Hub metadata."""
+    if local_path is not None:
+        return str(local_path.expanduser().resolve(strict=True))
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.constants import HF_HUB_OFFLINE
+
+    return snapshot_download(repo, revision=revision, allow_patterns=files, local_files_only=HF_HUB_OFFLINE)
 
 
 def camera_observation(request):
@@ -193,22 +191,29 @@ class AstribotRuntime:
         self.lock = RLock()
 
     @classmethod
-    def from_checkpoint(cls, checkpoint: Path, uva_dir: Path, device: str, *, qwen_assets=None, fast_assets=None):
+    def from_checkpoint(cls, checkpoint: Path, device: str = "cuda:0", *, qwen_assets=None, fast_assets=None):
         config = json.loads((checkpoint / "config.json").read_text())
         checkpoint_statistics(config)
-        bind_uva(uva_dir)
-        from prism_vla.modeling.checkpoint_compat import instruction_encoder_config
+        from accelerate import init_empty_weights
         from transformers import AutoTokenizer
 
-        from prism_vla.modeling.model import PrismVLA, PrismVLAConfig
-        from prism_vla.perception.encoders import build_visual_encoder
+        from prism_astribot_vla.modeling.checkpoint_compat import instruction_encoder_config
+        from prism_astribot_vla.modeling.config import PrismVLAConfig
+        from prism_astribot_vla.modeling.model import PrismVLA
+        from prism_astribot_vla.perception.encoders import build_visual_encoder
 
-        if qwen_assets is not None:
-            config["qwen_model_name"] = config["instruction_encoder_model_name"] = str(qwen_assets.resolve())
-        if fast_assets is not None:
-            config["fast_pretrained_path"] = str(fast_assets.resolve())
+        qwen = model_assets(
+            qwen_assets, "Qwen/Qwen3.5-2B-Base", QWEN_REVISION,
+            ("config.json", "tokenizer.json", "tokenizer_config.json", "vocab.json", "merges.txt",
+             "added_tokens.json", "special_tokens_map.json", "chat_template.jinja"),
+        )
+        config["qwen_model_name"] = config["instruction_encoder_model_name"] = qwen
+        config["fast_pretrained_path"] = model_assets(
+            fast_assets, "physical-intelligence/fast", FAST_REVISION, ("tokenizer.json", "processor_config.json"),
+        )
         config.update(stage1_checkpoint="", gradient_checkpointing=False)
-        model = PrismVLA(PrismVLAConfig.from_dict(config))
+        with init_empty_weights(include_buffers=False):
+            model = PrismVLA(PrismVLAConfig.from_dict(config))
         if instruction_encoder_config(model.config) != instruction_encoder_config(config):
             raise ValueError("Constructed instruction encoder differs from the checkpoint")
         torch_device = torch.device(device)
@@ -225,14 +230,14 @@ class AstribotRuntime:
                 summary_pooling=config["visual_encoder_summary_pooling"],
                 dynamic_resolution=config["visual_encoder_dynamic_resolution"],
             ).eval().requires_grad_(False).to(torch_device)
-        tokenizer = AutoTokenizer.from_pretrained(config["instruction_encoder_model_name"], local_files_only=True)
+        tokenizer = AutoTokenizer.from_pretrained(qwen, local_files_only=True)
         return cls(model, tokenizer, encoder, config, torch_device)
 
     def new_session(self):
         return AstribotSession(self)
 
     def prompt_tokens(self, task: str, subtask: str):
-        from prism_vla.data.instruction_conditioning import format_instruction, tokenize_instructions
+        from prism_astribot_vla.data.instruction_conditioning import format_instruction, tokenize_instructions
 
         prompt = format_instruction(
             {"task instruction": task, "subtask instruction": subtask},
@@ -321,17 +326,16 @@ def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", required=True, type=Path, help="Full Astribot checkpoint directory")
-    parser.add_argument("--uva-dir", type=Path, default=os.getenv("PRISM_UVA_DIR"),
-                        required="PRISM_UVA_DIR" not in os.environ, help="Checkpoint-compatible UVA checkout")
-    parser.add_argument("--qwen-assets", type=Path, help="Local pinned Qwen snapshot, if moved")
-    parser.add_argument("--fast-assets", type=Path, help="Local FAST tokenizer assets, if moved")
+    parser.add_argument("--qwen-assets", type=Path, help="Local Qwen configuration and tokenizer (optional)")
+    parser.add_argument("--fast-assets", type=Path, help="Local FAST tokenizer (optional)")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    runtime = AstribotRuntime.from_checkpoint(args.checkpoint, args.uva_dir, args.device,
-                                            qwen_assets=args.qwen_assets, fast_assets=args.fast_assets)
+    runtime = AstribotRuntime.from_checkpoint(
+        args.checkpoint, args.device, qwen_assets=args.qwen_assets, fast_assets=args.fast_assets,
+    )
     serve(runtime, args.host, args.port, metadata=METADATA)
 
 
